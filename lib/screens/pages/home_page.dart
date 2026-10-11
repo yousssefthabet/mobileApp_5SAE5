@@ -1,6 +1,10 @@
-// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
+import 'charger_details_page.dart';
+import 'kiosk_detail_page.dart';
+import 'report_details_page.dart';
+import 'reserve_spot_page.dart';
+import 'notifications_page.dart';
 
 class HomePage extends StatefulWidget {
   final VoidCallback? onNavigateToProfile;
@@ -22,7 +26,6 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _selectedFilterIndex = 0; // 0: EV, 1: Kiosks, 2: Reports
-  bool _isReserved = false;
 
   static const Color primaryGreen = Color(0xFF086B5B);
   static const Color badgeGreenText = Color(0xFF0D6855);
@@ -66,7 +69,17 @@ class _HomePageState extends State<HomePage> {
                         child: _buildMapPin(
                           color: primaryGreen,
                           icon: Icons.bolt,
-                          onTap: () => _showPinInfo(context, 'EV Station - North'),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const ChargerDetailsPage(
+                                  stationName: 'EV Station - North',
+                                  distance: '1.2 km',
+                                ),
+                              ),
+                            );
+                          },
                         ),
                       ),
 
@@ -78,7 +91,14 @@ class _HomePageState extends State<HomePage> {
                           color: primaryGreen,
                           icon: Icons.bolt,
                           isHighlighted: true,
-                          onTap: () => _showPinInfo(context, 'Central Square Hub'),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const ChargerDetailsPage(),
+                              ),
+                            );
+                          },
                         ),
                       ),
 
@@ -89,7 +109,14 @@ class _HomePageState extends State<HomePage> {
                         child: _buildMapPin(
                           color: blueKioskColor,
                           icon: Icons.storefront_outlined,
-                          onTap: () => _showPinInfo(context, 'City Info Kiosk'),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const KioskDetailPage(),
+                              ),
+                            );
+                          },
                         ),
                       ),
 
@@ -100,7 +127,14 @@ class _HomePageState extends State<HomePage> {
                         child: _buildMapPin(
                           color: orangeTrashColor,
                           icon: Icons.delete_outline,
-                          onTap: () => _showPinInfo(context, 'Reported Trash Bin'),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const ReportDetailsPage(),
+                              ),
+                            );
+                          },
                         ),
                       ),
 
@@ -205,6 +239,38 @@ class _HomePageState extends State<HomePage> {
                                 ),
                               ),
                             ),
+                            IconButton(
+                              icon: Stack(
+                                children: [
+                                  const Icon(
+                                    Icons.notifications_none_outlined,
+                                    color: Color(0xFF5A6B67),
+                                    size: 24,
+                                  ),
+                                  Positioned(
+                                    right: 2,
+                                    top: 2,
+                                    child: Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: const BoxDecoration(
+                                        color: primaryGreen,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const NotificationsPage(),
+                                  ),
+                                );
+                              },
+                            ),
+                            const SizedBox(width: 2),
                             GestureDetector(
                               onTap: widget.onNavigateToProfile,
                               child: Container(
@@ -340,62 +406,72 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
 
-                    // Header Row: Nearest Charger + Available badge
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: const [
-                              Text(
-                                'NEAREST CHARGER',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.6,
-                                  color: Color(0xFF7E8F8B),
-                                ),
-                              ),
-                              SizedBox(height: 3),
-                              Text(
-                                'Central Square Hub',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1E2A27),
-                                ),
-                              ),
-                              SizedBox(height: 2),
-                              Text(
-                                '350 m · Open 24 hours',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: Color(0xFF7E8F8B),
-                                ),
-                              ),
-                            ],
+                    // Header Row: Nearest Charger + Available badge (Tappable to view ChargerDetailsPage)
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ChargerDetailsPage(),
                           ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE4F3EE),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Text(
-                            'Available',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: badgeGreenText,
+                        );
+                      },
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: const [
+                                Text(
+                                  'NEAREST CHARGER',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.6,
+                                    color: Color(0xFF7E8F8B),
+                                  ),
+                                ),
+                                SizedBox(height: 3),
+                                Text(
+                                  'Central Square Hub',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1E2A27),
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  '350 m · Open 24 hours',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF7E8F8B),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ),
-                      ],
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE4F3EE),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Text(
+                              'Available',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: badgeGreenText,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
 
                     const SizedBox(height: 14),
@@ -432,16 +508,11 @@ class _HomePageState extends State<HomePage> {
                             height: 48,
                             child: ElevatedButton(
                               onPressed: () {
-                                setState(() {
-                                  _isReserved = !_isReserved;
-                                });
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    backgroundColor: primaryGreen,
-                                    content: Text(
-                                      _isReserved
-                                          ? 'Spot reserved at Central Square Hub!'
-                                          : 'Reservation cancelled',
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const ReserveSpotPage(
+                                      stationName: 'Central Square Hub',
                                     ),
                                   ),
                                 );
@@ -454,9 +525,9 @@ class _HomePageState extends State<HomePage> {
                                   borderRadius: BorderRadius.circular(24),
                                 ),
                               ),
-                              child: Text(
-                                _isReserved ? 'Spot Reserved ✓' : 'Reserve a spot',
-                                style: const TextStyle(
+                              child: const Text(
+                                'Reserve a spot',
+                                style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -613,15 +684,6 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  void _showPinInfo(BuildContext context, String title) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Selected: $title'),
-        duration: const Duration(seconds: 1),
       ),
     );
   }

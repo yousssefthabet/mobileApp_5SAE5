@@ -1,6 +1,6 @@
-// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
+import 'report_sent_page.dart';
 
 class ReportTrashPage extends StatefulWidget {
   final VoidCallback? onNavigateToMap;
@@ -340,31 +340,10 @@ class _ReportTrashPageState extends State<ReportTrashPage> {
   }
 
   void _submitReport() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: const [
-            Icon(Icons.check_circle, color: primaryGreen, size: 28),
-            SizedBox(width: 10),
-            Text('Report Submitted'),
-          ],
-        ),
-        content: Text(
-          'Your report for "${_problemOptions[_selectedProblemIndex]['title']}" has been sent successfully. A municipality worker will be assigned shortly.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              if (widget.onNavigateToMyReports != null) {
-                widget.onNavigateToMyReports!();
-              }
-            },
-            child: const Text('View in My Reports', style: TextStyle(color: primaryGreen, fontWeight: FontWeight.bold)),
-          ),
-        ],
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const ReportSentPage(reportId: '#1043'),
       ),
     );
   }

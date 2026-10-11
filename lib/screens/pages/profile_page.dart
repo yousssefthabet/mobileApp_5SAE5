@@ -1,6 +1,8 @@
-// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
+import 'notifications_page.dart';
+import 'charging_complete_page.dart';
+import 'payment_page.dart';
 
 class ProfilePage extends StatelessWidget {
   final VoidCallback? onNavigateToMap;
@@ -114,17 +116,38 @@ class ProfilePage extends StatelessWidget {
                   children: [
                     _buildMenuItem(
                       title: 'Charging history',
-                      onTap: () {},
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ChargingCompletePage(),
+                          ),
+                        );
+                      },
                     ),
                     _buildDivider(),
                     _buildMenuItem(
                       title: 'Payment methods',
-                      onTap: () {},
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const PaymentPage(),
+                          ),
+                        );
+                      },
                     ),
                     _buildDivider(),
                     _buildMenuItem(
                       title: 'Notifications',
-                      onTap: () {},
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const NotificationsPage(),
+                          ),
+                        );
+                      },
                     ),
                     _buildDivider(),
                     _buildMenuItem(

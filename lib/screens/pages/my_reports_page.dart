@@ -1,6 +1,6 @@
-// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
+import 'report_details_page.dart';
 
 class MyReportsPage extends StatefulWidget {
   final VoidCallback? onNavigateToMap;
@@ -170,12 +170,25 @@ class _MyReportsPageState extends State<MyReportsPage> {
 
   /// Card 1: Overflowing bin (Active with timeline stepper)
   Widget _buildActiveReportCard() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE8ECEB), width: 1),
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const ReportDetailsPage(
+              reportId: '#1042',
+              problemTitle: 'Overflowing bin',
+              location: 'Rue de la Liberté · today',
+            ),
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFFE8ECEB), width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.03),
@@ -273,6 +286,7 @@ class _MyReportsPageState extends State<MyReportsPage> {
           ),
         ],
       ),
+    ),
     );
   }
 
