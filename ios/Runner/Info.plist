@@ -24,6 +24,10 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Chargi needs camera access to let you capture photos for reporting trash and issues.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Chargi needs access to your photos to attach images to your trash reports.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

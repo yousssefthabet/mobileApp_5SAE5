@@ -4,10 +4,14 @@ import 'report_details_page.dart';
 
 class ReportSentPage extends StatelessWidget {
   final String reportId;
+  final String? location;
+  final String? problemTitle;
 
   const ReportSentPage({
     super.key,
     this.reportId = '#1043',
+    this.location,
+    this.problemTitle,
   });
 
   static const Color primaryGreen = Color(0xFF086B5B);
@@ -175,8 +179,8 @@ class ReportSentPage extends StatelessWidget {
                             MaterialPageRoute(
                               builder: (_) => ReportDetailsPage(
                                 reportId: reportId,
-                                problemTitle: 'Overflowing bin',
-                                location: 'Rue de la Liberté · today',
+                                problemTitle: problemTitle ?? 'Overflowing bin',
+                                location: location != null ? '$location · today' : 'Rue de la Liberté · today',
                               ),
                             ),
                           );
