@@ -7,24 +7,21 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:chargi/main.dart';
+import 'package:chargi/screens/pages/report_details_page.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('ReportDetailsPage renders with given report data', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: ReportDetailsPage(
+          reportId: '#TEST01',
+          problemTitle: 'Test Overflowing bin',
+          location: 'Test Location',
+        ),
+      ),
+    );
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('Report #TEST01'), findsOneWidget);
+    expect(find.text('Test Overflowing bin'), findsOneWidget);
   });
 }

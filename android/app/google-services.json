@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "52480821772",
+    "project_id": "chargi-b044b",
+    "storage_bucket": "chargi-b044b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:52480821772:android:511a5ea80c6b4c05797c29",
+        "android_client_info": {
+          "package_name": "com.example.chargi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAc5LmnXBGmlCVM5Kkw0pRx31JkHSYGbEQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

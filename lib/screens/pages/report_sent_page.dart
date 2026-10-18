@@ -4,12 +4,14 @@ import 'report_details_page.dart';
 
 class ReportSentPage extends StatelessWidget {
   final String reportId;
+  final String? reportDocId;
   final String? location;
   final String? problemTitle;
 
   const ReportSentPage({
     super.key,
     this.reportId = '#1043',
+    this.reportDocId,
     this.location,
     this.problemTitle,
   });
@@ -179,6 +181,7 @@ class ReportSentPage extends StatelessWidget {
                             MaterialPageRoute(
                               builder: (_) => ReportDetailsPage(
                                 reportId: reportId,
+                                reportDocId: reportDocId,
                                 problemTitle: problemTitle ?? 'Overflowing bin',
                                 location: location != null ? '$location · today' : 'Rue de la Liberté · today',
                               ),

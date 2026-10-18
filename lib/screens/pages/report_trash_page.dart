@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
 import 'report_sent_page.dart';
 import 'map_location_picker_page.dart';
@@ -29,6 +31,7 @@ class _ReportTrashPageState extends State<ReportTrashPage> {
   // Photo State
   Uint8List? _imageBytes;
   bool _isPickingPhoto = false;
+  bool _isSubmitting = false;
 
   // Location State
   MapLocationResult _selectedLocation = const MapLocationResult(
@@ -316,19 +319,88 @@ class _ReportTrashPageState extends State<ReportTrashPage> {
     }
   }
 
-  void _submitReport() {
-    final problemTitle = _problemOptions[_selectedProblemIndex]['title'] as String;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ReportSentPage(
-          reportId: '#1043',
-          location: _selectedLocation.address,
-          problemTitle: problemTitle,
+  Future<void> _submitReport() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in before submitting a report.'),
+          backgroundColor: Colors.redAccent,
         ),
-      ),
-    );
+      );
+      return;
+    }
+
+    if (_isSubmitting) return;
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final problemTitle =
+          _problemOptions[_selectedProblemIndex]['title'] as String;
+
+      final docRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('reports')
+          .doc();
+
+      final displayRef = '#${docRef.id.substring(0, 6).toUpperCase()}';
+
+      await docRef.set({
+        'id': docRef.id,
+        'reference': displayRef,
+        'problemTitle': problemTitle,
+        'location': _selectedLocation.address,
+        'landmark': _selectedLocation.landmark,
+        'latitude': _selectedLocation.latitude,
+        'longitude': _selectedLocation.longitude,
+        'mapOffsetX': _selectedLocation.mapOffsetRatio.dx,
+        'mapOffsetY': _selectedLocation.mapOffsetRatio.dy,
+        'status': 'sent',
+        'workerName': 'Unassigned',
+        'estimatedArrival': 'Reviewing report',
+        'hasPhoto': _imageBytes != null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ReportSentPage(
+            reportId: displayRef,
+            reportDocId: docRef.id,
+            location: _selectedLocation.address,
+            problemTitle: problemTitle,
+          ),
+        ),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      debugPrint('Firestore submit error: ${e.code} - ${e.message}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to submit report: ${e.message ?? e.code}'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      debugPrint('Unexpected submit error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not submit report: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -414,22 +486,32 @@ class _ReportTrashPageState extends State<ReportTrashPage> {
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: _submitReport,
+                  onPressed: _isSubmitting ? null : _submitReport,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryGreen,
                     foregroundColor: Colors.white,
+                    disabledBackgroundColor: primaryGreen.withValues(alpha: 0.6),
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(26),
                     ),
                   ),
-                  child: const Text(
-                    'Submit report',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                  child: _isSubmitting
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Submit report',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                 ),
               ),
 

@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // User profile document:
+    // Each authenticated user can only read and write their own profile
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      // User's private reports subcollection:
+      // Users can only view, submit, and update their own reports
+      match /reports/{reportId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Default deny for any unmatched document or collection
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

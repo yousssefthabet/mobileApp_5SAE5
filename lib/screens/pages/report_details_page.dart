@@ -1,8 +1,11 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ReportDetailsPage extends StatelessWidget {
   final String reportId;
+  final String? reportDocId;
   final String problemTitle;
   final String location;
   final String workerName;
@@ -11,6 +14,7 @@ class ReportDetailsPage extends StatelessWidget {
   const ReportDetailsPage({
     super.key,
     this.reportId = '#1042',
+    this.reportDocId,
     this.problemTitle = 'Overflowing bin',
     this.location = 'Rue de la Liberté · today',
     this.workerName = '[Worker name]',
@@ -20,13 +24,177 @@ class ReportDetailsPage extends StatelessWidget {
   static const Color primaryGreen = Color(0xFF086B5B);
   static const Color orangeBadgeBg = Color(0xFFFDEEE5);
   static const Color orangeBadgeText = Color(0xFFC05218);
+  static const Color greenBadgeBg = Color(0xFFE4F3EE);
+  static const Color greenBadgeText = Color(0xFF0D6855);
+  static const Color blueBadgeBg = Color(0xFFE8F1FC);
+  static const Color blueBadgeText = Color(0xFF1E63B8);
+  static const Color mintBadgeBg = Color(0xFFE2EFEA);
+  static const Color mintBadgeText = Color(0xFF086B5B);
   static const Color textDark = Color(0xFF1E2926);
   static const Color textMuted = Color(0xFF7A8B86);
   static const Color cardBorder = Color(0xFFE8ECEB);
   static const Color backgroundColor = Color(0xFFF7F9F8);
 
+  String _formatTimestamp(dynamic timestamp) {
+    if (timestamp is Timestamp) {
+      final date = timestamp.toDate();
+      final hour = date.hour.toString().padLeft(2, '0');
+      final minute = date.minute.toString().padLeft(2, '0');
+      return '$hour:$minute';
+    }
+    return 'today';
+  }
+
   @override
   Widget build(BuildContext context) {
+    User? user;
+    try {
+      user = FirebaseAuth.instance.currentUser;
+    } catch (_) {
+      user = null;
+    }
+
+    if (reportDocId != null && user != null) {
+      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('reports')
+            .doc(reportDocId)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(
+              backgroundColor: backgroundColor,
+              body: Center(
+                child: CircularProgressIndicator(color: primaryGreen),
+              ),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Scaffold(
+              backgroundColor: backgroundColor,
+              appBar: AppBar(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: textDark),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+              body: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Failed to load report details',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: textDark),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${snapshot.error}',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 13, color: textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+
+          final data = snapshot.data?.data();
+          final displayId = (data?['reference'] as String?) ?? reportId;
+          final title = (data?['problemTitle'] as String?) ?? problemTitle;
+          final loc = (data?['location'] as String?) ?? location;
+          final status = (data?['status'] as String?) ?? 'sent';
+          final worker = (data?['workerName'] as String?) ?? workerName;
+          final arrival = (data?['estimatedArrival'] as String?) ?? estimatedArrival;
+          final createdTime = _formatTimestamp(data?['createdAt']);
+
+          return _buildContent(
+            context: context,
+            displayId: displayId,
+            title: title,
+            loc: loc,
+            status: status,
+            worker: worker,
+            arrival: arrival,
+            sentTime: createdTime,
+          );
+        },
+      );
+    }
+
+    return _buildContent(
+      context: context,
+      displayId: reportId,
+      title: problemTitle,
+      loc: location,
+      status: 'in_progress',
+      worker: workerName,
+      arrival: estimatedArrival,
+      sentTime: '10:02',
+    );
+  }
+
+  Widget _buildContent({
+    required BuildContext context,
+    required String displayId,
+    required String title,
+    required String loc,
+    required String status,
+    required String worker,
+    required String arrival,
+    required String sentTime,
+  }) {
+    Color badgeBg;
+    Color badgeText;
+    String badgeLabel;
+
+    switch (status.toLowerCase()) {
+      case 'resolved':
+        badgeBg = greenBadgeBg;
+        badgeText = greenBadgeText;
+        badgeLabel = 'Resolved';
+        break;
+      case 'in_progress':
+        badgeBg = orangeBadgeBg;
+        badgeText = orangeBadgeText;
+        badgeLabel = 'In progress';
+        break;
+      case 'assigned':
+        badgeBg = blueBadgeBg;
+        badgeText = blueBadgeText;
+        badgeLabel = 'Assigned';
+        break;
+      case 'sent':
+      default:
+        badgeBg = mintBadgeBg;
+        badgeText = mintBadgeText;
+        badgeLabel = 'Sent';
+        break;
+    }
+
+    final isSentCompleted = true;
+    final isSentCurrent = status == 'sent';
+
+    final isAssignedCompleted =
+        status == 'assigned' || status == 'in_progress' || status == 'resolved';
+    final isAssignedCurrent = status == 'assigned';
+
+    final isInProgressCompleted =
+        status == 'in_progress' || status == 'resolved';
+    final isInProgressCurrent = status == 'in_progress';
+
+    final isResolvedCompleted = status == 'resolved';
+    final isResolvedCurrent = status == 'resolved';
+
     return Scaffold(
       backgroundColor: backgroundColor,
       appBar: AppBar(
@@ -37,7 +205,7 @@ class ReportDetailsPage extends StatelessWidget {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          'Report $reportId',
+          'Report $displayId',
           style: const TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w700,
@@ -92,7 +260,7 @@ class ReportDetailsPage extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    problemTitle,
+                    title,
                     style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
@@ -104,15 +272,15 @@ class ReportDetailsPage extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: orangeBadgeBg,
+                    color: badgeBg,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Text(
-                    'In progress',
+                  child: Text(
+                    badgeLabel,
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: orangeBadgeText,
+                      color: badgeText,
                     ),
                   ),
                 ),
@@ -120,7 +288,7 @@ class ReportDetailsPage extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              location,
+              loc,
               style: const TextStyle(
                 fontSize: 13,
                 color: textMuted,
@@ -140,32 +308,34 @@ class ReportDetailsPage extends StatelessWidget {
               child: Column(
                 children: [
                   _buildTimelineStep(
-                    isCompleted: true,
-                    isCurrent: false,
+                    isCompleted: isSentCompleted,
+                    isCurrent: isSentCurrent,
                     isLast: false,
                     title: 'Sent',
-                    subtitle: '10:02',
+                    subtitle: sentTime,
                   ),
                   _buildTimelineStep(
-                    isCompleted: true,
-                    isCurrent: false,
+                    isCompleted: isAssignedCompleted,
+                    isCurrent: isAssignedCurrent,
                     isLast: false,
                     title: 'Assigned',
-                    subtitle: '10:09',
+                    subtitle: isAssignedCompleted ? 'Assigned to team' : 'Waiting',
                   ),
                   _buildTimelineStep(
-                    isCompleted: true,
-                    isCurrent: true,
+                    isCompleted: isInProgressCompleted,
+                    isCurrent: isInProgressCurrent,
                     isLast: false,
                     title: 'In progress',
-                    subtitle: 'Worker on the way',
+                    subtitle: isInProgressCompleted
+                        ? (status == 'resolved' ? 'Completed' : 'Worker on the way')
+                        : 'Waiting',
                   ),
                   _buildTimelineStep(
-                    isCompleted: false,
-                    isCurrent: false,
+                    isCompleted: isResolvedCompleted,
+                    isCurrent: isResolvedCurrent,
                     isLast: true,
                     title: 'Resolved',
-                    subtitle: 'Waiting',
+                    subtitle: isResolvedCompleted ? 'Area cleaned' : 'Waiting',
                   ),
                 ],
               ),
@@ -192,9 +362,11 @@ class ReportDetailsPage extends StatelessWidget {
                       shape: BoxShape.circle,
                     ),
                     alignment: Alignment.center,
-                    child: const Text(
-                      'W',
-                      style: TextStyle(
+                    child: Text(
+                      worker.trim().isNotEmpty
+                          ? worker.trim()[0].toUpperCase()
+                          : 'W',
+                      style: const TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
@@ -209,7 +381,7 @@ class ReportDetailsPage extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          workerName,
+                          worker,
                           style: const TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
@@ -218,7 +390,7 @@ class ReportDetailsPage extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          estimatedArrival,
+                          arrival,
                           style: const TextStyle(
                             fontSize: 12,
                             color: textMuted,
@@ -246,7 +418,7 @@ class ReportDetailsPage extends StatelessWidget {
                       onPressed: () {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text('Opening chat with $workerName...'),
+                            content: Text('Opening chat with $worker...'),
                             duration: const Duration(seconds: 2),
                           ),
                         );
