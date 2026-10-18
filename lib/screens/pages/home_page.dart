@@ -651,6 +651,7 @@ class _HomePageState extends State<HomePage> {
                   kiosk['openingHoursText']?.toString() ?? 'Hours unavailable',
               latitude: coord.latitude,
               longitude: coord.longitude,
+              allKiosks: _kiosks,
             ),
           ),
         );
