@@ -1,20 +1,19 @@
-// ignore_for_file: deprecated_member_use
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+
 import 'payment_page.dart';
 
-const Color _primaryGreen = Color(0xFF086B5B);
-const Color _textDark = Color(0xFF1E2926);
-const Color _textMuted = Color(0xFF7A8B86);
-const Color _cardBorder = Color(0xFFE8ECEB);
-const Color _chipBorder = Color(0xFFDEE5E2);
-const Color _backgroundColor = Color(0xFFF7F9F8);
-
 class ReserveSpotPage extends StatefulWidget {
+  final String chargerId;
   final String stationName;
+  final int initialConnectorIndex;
 
   const ReserveSpotPage({
     super.key,
-    this.stationName = 'Central Square Hub',
+    required this.chargerId,
+    this.stationName = 'Charging station',
+    this.initialConnectorIndex = 0,
   });
 
   @override
@@ -22,317 +21,631 @@ class ReserveSpotPage extends StatefulWidget {
 }
 
 class _ReserveSpotPageState extends State<ReserveSpotPage> {
-  int _selectedConnector = 0; // 0: 1 · CCS, 1: 2 · CCS
-  int _selectedDate = 0; // 0: Today, 1: Mon 12, 2: Tue 13
-  int _selectedStartTime = 2; // 2: 10:30
-  int _selectedDuration = 1; // 1: 1 hour
+  static const Color primaryGreen = Color(0xFF086B5B);
+  static const Color backgroundColor = Color(0xFFF7F9F8);
 
-  final List<String> _connectors = ['1 · CCS', '2 · CCS'];
-  final List<String> _dates = ['Today', 'Mon 12', 'Tue 13'];
-  final List<String> _startTimes = [
-    '09:30',
-    '10:00', // disabled in design
-    '10:30',
-    '11:00',
-    '11:30',
-    '12:00',
-  ];
-  final List<String> _durations = ['30 min', '1 hour', '2 hours'];
+  DateTime _selectedDate = DateTime.now();
+  TimeOfDay _selectedTime = TimeOfDay.fromDateTime(
+    DateTime.now().add(const Duration(minutes: 5)),
+  );
+  int _selectedDurationMinutes = 60;
+  int? _selectedConnectorId;
+  bool _isOpeningPayment = false;
+
+  double _number(dynamic value, {double fallback = 0}) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? fallback;
+  }
+
+  int _connectorId(dynamic value, {int fallback = -1}) {
+    if (value is num) return value.toInt();
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      if (parsed != null) return parsed;
+    }
+    return fallback;
+  }
+
+  int _extractConnectorId(Map<String, dynamic> c, int fallbackIndex) {
+    final raw = c['connectorId'] ?? c['id'] ?? c['connector_id'];
+    return _connectorId(raw, fallback: fallbackIndex >= 0 ? fallbackIndex + 1 : 1);
+  }
+
+  DateTime get _startDateTime => DateTime(
+        _selectedDate.year,
+        _selectedDate.month,
+        _selectedDate.day,
+        _selectedTime.hour,
+        _selectedTime.minute,
+      );
+
+  String _money(double amount) => '${amount.toStringAsFixed(2)} TND';
+
+  String _formatDate(DateTime date) {
+    return '${date.day.toString().padLeft(2, '0')}/'
+        '${date.month.toString().padLeft(2, '0')}/'
+        '${date.year}';
+  }
+
+  String _formatTime(DateTime date) {
+    return '${date.hour.toString().padLeft(2, '0')}:'
+        '${date.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _formatTimeSlot(DateTime start, int durationMinutes) {
+    final end = start.add(Duration(minutes: durationMinutes));
+    return '${_formatDate(start)} · ${_formatTime(start)}'
+        ' – ${_formatTime(end)}';
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+
+    final result = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate.isBefore(
+        DateTime(now.year, now.month, now.day),
+      )
+          ? now
+          : _selectedDate,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: now.add(const Duration(days: 90)),
+    );
+
+    if (result != null && mounted) {
+      setState(() => _selectedDate = result);
+    }
+  }
+
+  Future<void> _pickTime() async {
+    final result = await showTimePicker(
+      context: context,
+      initialTime: _selectedTime,
+    );
+
+    if (result != null && mounted) {
+      setState(() => _selectedTime = result);
+    }
+  }
+
+  Future<void> _continueToPayment({
+    required Map<String, dynamic> charger,
+    required Map<String, dynamic> connector,
+    required double pricePerKwh,
+    required double reservationFee,
+  }) async {
+    if (_isOpeningPayment) return;
+
+    final now = DateTime.now();
+    final start = _startDateTime;
+
+    // Allow reservations for now/today with a 15-minute tolerance
+    if (start.isBefore(now.subtract(const Duration(minutes: 15)))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select a future reservation time.'),
+        ),
+      );
+      return;
+    }
+
+    final effectiveStart = start.isBefore(now) ? now : start;
+
+    final connectorId = _extractConnectorId(connector, 0);
+
+    if (connectorId < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Invalid connector ID. Please select another.'),
+        ),
+      );
+      return;
+    }
+
+    final powerKw = _number(
+      connector['power'],
+      fallback: _number(charger['maxPower']),
+    );
+
+    // Estimate assumes the connector operates at rated power
+    // throughout the selected duration.
+    final estimatedCharging =
+        powerKw * (_selectedDurationMinutes / 60.0) * pricePerKwh;
+
+    final total = estimatedCharging + reservationFee;
+
+    setState(() => _isOpeningPayment = true);
+
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PaymentPage(
+            chargerId: widget.chargerId,
+            connectorId: connectorId,
+            startDateTime: effectiveStart,
+            durationMinutes: _selectedDurationMinutes,
+            amount: total,
+            stationName: widget.stationName,
+            connectorName:
+                'Connector $connectorId · ${connector['type'] ?? 'Standard'}',
+            timeSlot: _formatTimeSlot(
+              effectiveStart,
+              _selectedDurationMinutes,
+            ),
+            subtotal: _money(estimatedCharging),
+            fees: _money(reservationFee),
+            total: _money(total),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isOpeningPayment = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final chargerRef = FirebaseFirestore.instance
+        .collection('ev_chargers')
+        .doc(widget.chargerId);
+
     return Scaffold(
-      backgroundColor: _backgroundColor,
+      backgroundColor: backgroundColor,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: _textDark),
-          onPressed: () => Navigator.pop(context),
-        ),
         title: const Text(
           'Reserve a spot',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w700,
-            color: _textDark,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        centerTitle: false,
+        backgroundColor: backgroundColor,
+        foregroundColor: Colors.black87,
+        elevation: 0,
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Station subtitle (Figure 9)
-                  Text(
-                    widget.stationName,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: _textMuted,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: chargerRef.snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Center(
+              child: Text('Could not load charging station details.'),
+            );
+          }
 
-                  const SizedBox(height: 24),
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: primaryGreen),
+            );
+          }
 
-                  // 1. CONNECTOR SECTION
-                  _buildSectionHeader('CONNECTOR'),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: List.generate(_connectors.length, (index) {
-                      final isSelected = _selectedConnector == index;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 12),
-                        child: _buildSelectableChip(
-                          label: _connectors[index],
-                          isSelected: isSelected,
-                          onTap: () => setState(() => _selectedConnector = index),
-                        ),
-                      );
-                    }),
-                  ),
+          if (!snapshot.hasData || !snapshot.data!.exists) {
+            return const Center(
+              child: Text('Charging station not found.'),
+            );
+          }
 
-                  const SizedBox(height: 24),
+          final charger = snapshot.data!.data()!;
 
-                  // 2. DATE SECTION
-                  _buildSectionHeader('DATE'),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: List.generate(_dates.length, (index) {
-                      final isSelected = _selectedDate == index;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 12),
-                        child: _buildSelectableChip(
-                          label: _dates[index],
-                          isSelected: isSelected,
-                          onTap: () => setState(() => _selectedDate = index),
-                        ),
-                      );
-                    }),
-                  ),
+          if (charger['isActive'] == false) {
+            return const Center(
+              child: Text('This charging station is currently inactive.'),
+            );
+          }
 
-                  const SizedBox(height: 24),
+          final rawConnectors = charger['connectors'];
 
-                  // 3. START TIME SECTION
-                  _buildSectionHeader('START TIME'),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: List.generate(_startTimes.length, (index) {
-                      final time = _startTimes[index];
-                      final isUnavailable = index == 1; // 10:00 is disabled
-                      final isSelected = _selectedStartTime == index;
+          final allConnectors = rawConnectors is List
+              ? rawConnectors
+                  .whereType<Map>()
+                  .map((item) => Map<String, dynamic>.from(item))
+                  .toList()
+              : <Map<String, dynamic>>[];
 
-                      return GestureDetector(
-                        onTap: isUnavailable
-                            ? null
-                            : () => setState(() => _selectedStartTime = index),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 150),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 22,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? _primaryGreen
-                                : isUnavailable
-                                    ? const Color(0xFFF2F4F3)
-                                    : Colors.white,
-                            borderRadius: BorderRadius.circular(22),
-                            border: Border.all(
-                              color: isSelected
-                                  ? _primaryGreen
-                                  : isUnavailable
-                                      ? const Color(0xFFE2E7E5)
-                                      : _chipBorder,
-                              width: 1,
-                            ),
-                          ),
-                          child: Text(
-                            time,
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                              color: isSelected
-                                  ? Colors.white
-                                  : isUnavailable
-                                      ? const Color(0xFFA8B5B1)
-                                      : _textDark,
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
-                  ),
+          final availableConnectors = allConnectors.where((connector) {
+            return connector['status']?.toString().toLowerCase() == 'free';
+          }).toList();
 
-                  const SizedBox(height: 24),
+          Map<String, dynamic>? selectedConnector;
 
-                  // 4. DURATION SECTION
-                  _buildSectionHeader('DURATION'),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: List.generate(_durations.length, (index) {
-                      final isSelected = _selectedDuration == index;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 12),
-                        child: _buildSelectableChip(
-                          label: _durations[index],
-                          isSelected: isSelected,
-                          onTap: () => setState(() => _selectedDuration = index),
-                        ),
-                      );
-                    }),
-                  ),
+          for (int i = 0; i < availableConnectors.length; i++) {
+            final connector = availableConnectors[i];
+            if (_extractConnectorId(connector, allConnectors.indexOf(connector)) ==
+                _selectedConnectorId) {
+              selectedConnector = connector;
+              break;
+            }
+          }
 
-                  const SizedBox(height: 28),
+          final effectiveConnector = selectedConnector ??
+              (availableConnectors.isNotEmpty
+                  ? (widget.initialConnectorIndex >= 0 &&
+                          widget.initialConnectorIndex < allConnectors.length &&
+                          availableConnectors.contains(allConnectors[widget.initialConnectorIndex])
+                      ? allConnectors[widget.initialConnectorIndex]
+                      : availableConnectors.first)
+                  : null);
 
-                  // 5. PRICING SUMMARY (Figure 9)
-                  Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: _cardBorder, width: 1),
-                    ),
-                    child: Column(
-                      children: [
-                        _buildSummaryPriceRow('Reservation fee', '[PRICE]'),
-                        const SizedBox(height: 12),
-                        _buildSummaryPriceRow('Estimated charging', '[PRICE]'),
-                      ],
-                    ),
-                  ),
+          final pricePerKwh = _number(
+            charger['pricePerKwh'] ??
+                charger['price_per_kwh'] ??
+                charger['price'],
+          );
 
-                  const SizedBox(height: 20),
-                ],
-              ),
-            ),
-          ),
+          final reservationFee = _number(
+            charger['reservationFee'] ?? charger['reservation_fee'],
+          );
 
-          // 6. Bottom Sticky Button: Continue to payment (Figure 9)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.06),
-                  blurRadius: 16,
-                  offset: const Offset(0, -4),
+          final powerKw = effectiveConnector == null
+              ? 0.0
+              : _number(
+                  effectiveConnector['power'],
+                  fallback: _number(charger['maxPower']),
+                );
+
+          final estimatedCharging = powerKw *
+              (_selectedDurationMinutes / 60.0) *
+              pricePerKwh;
+
+          final total = estimatedCharging + reservationFee;
+
+          return ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: Colors.grey.shade200),
                 ),
-              ],
-            ),
-            child: SafeArea(
-              top: false,
-              child: SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => PaymentPage(
-                          stationName: widget.stationName,
-                          connectorName: 'Connector ${_selectedConnector + 1}',
-                          timeSlot: '${_dates[_selectedDate]} ${_startTimes[_selectedStartTime]} · ${_durations[_selectedDuration]}',
-                          subtotal: '[PRICE]',
-                          fees: '[PRICE]',
-                          total: '[PRICE]',
-                        ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 54,
+                      height: 54,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE2EFEA),
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _primaryGreen,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(25),
+                      child: const Icon(
+                        Icons.ev_station,
+                        color: primaryGreen,
+                        size: 30,
+                      ),
                     ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.stationName,
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            '${availableConnectors.length} connector(s) available',
+                            style: TextStyle(
+                              color: Colors.grey.shade600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              const Text(
+                'Choose a connector',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              if (availableConnectors.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   child: const Text(
-                    'Continue to payment',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    'No connectors are currently available. Please try again later.',
                   ),
+                )
+              else
+                ...availableConnectors.map((connector) {
+                  final id = _extractConnectorId(
+                    connector,
+                    allConnectors.indexOf(connector),
+                  );
+                  final isSelected = effectiveConnector != null &&
+                      _extractConnectorId(
+                            effectiveConnector,
+                            allConnectors.indexOf(effectiveConnector),
+                          ) ==
+                          id;
+
+                  final power = _number(
+                    connector['power'],
+                    fallback: _number(charger['maxPower']),
+                  );
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => setState(() {
+                        _selectedConnectorId = id;
+                      }),
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isSelected
+                                ? primaryGreen
+                                : Colors.grey.shade300,
+                            width: isSelected ? 2 : 1,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.electrical_services,
+                              color: primaryGreen,
+                              size: 27,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Connector $id · ${connector['type'] ?? 'Standard'}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${power.toStringAsFixed(0)} kW · Available',
+                                    style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Icon(
+                              isSelected
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_unchecked,
+                              color: isSelected
+                                  ? primaryGreen
+                                  : Colors.grey,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+
+              const SizedBox(height: 18),
+
+              const Text(
+                'Reservation date and time',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-            ),
-          ),
-        ],
+
+              const SizedBox(height: 12),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: _selectionButton(
+                      icon: Icons.calendar_today_outlined,
+                      label: _formatDate(_selectedDate),
+                      onTap: _pickDate,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _selectionButton(
+                      icon: Icons.access_time,
+                      label: _selectedTime.format(context),
+                      onTap: _pickTime,
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 24),
+
+              const Text(
+                'Charging duration',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [30, 60, 120].map((minutes) {
+                  final selected = _selectedDurationMinutes == minutes;
+
+                  return ChoiceChip(
+                    label: Text(
+                      minutes < 60
+                          ? '$minutes min'
+                          : '${minutes ~/ 60} hour${minutes >= 120 ? 's' : ''}',
+                    ),
+                    selected: selected,
+                    selectedColor: const Color(0xFFE2EFEA),
+                    onSelected: (_) {
+                      setState(() => _selectedDurationMinutes = minutes);
+                    },
+                  );
+                }).toList(),
+              ),
+
+              const SizedBox(height: 24),
+
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Column(
+                  children: [
+                    _priceRow(
+                      'Charging estimate',
+                      _money(estimatedCharging),
+                    ),
+                    const SizedBox(height: 12),
+                    _priceRow(
+                      'Reservation fee',
+                      _money(reservationFee),
+                    ),
+                    const Divider(height: 28),
+                    _priceRow('Total', _money(total), bold: true),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Estimated price only. Actual charging costs may vary.',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+
+              SizedBox(
+                height: 54,
+                child: ElevatedButton(
+                  onPressed: effectiveConnector == null ||
+                          _isOpeningPayment
+                      ? null
+                      : () => _continueToPayment(
+                            charger: charger,
+                            connector: effectiveConnector,
+                            pricePerKwh: pricePerKwh,
+                            reservationFee: reservationFee,
+                          ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: primaryGreen,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                  ),
+                  child: _isOpeningPayment
+                      ? const SizedBox(
+                          height: 22,
+                          width: 22,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text(
+                          'Continue to payment',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+            ],
+          );
+        },
       ),
     );
   }
 
-  Widget _buildSectionHeader(String title) {
-    return Text(
-      title,
-      style: const TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 0.6,
-        color: _textMuted,
-      ),
-    );
-  }
-
-  Widget _buildSelectableChip({
+  Widget _selectionButton({
+    required IconData icon,
     required String label,
-    required bool isSelected,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: isSelected ? _primaryGreen : Colors.white,
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(
-            color: isSelected ? _primaryGreen : _chipBorder,
-            width: 1,
-          ),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade300),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-            color: isSelected ? Colors.white : _textDark,
-          ),
+        child: Row(
+          children: [
+            Icon(icon, color: primaryGreen, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildSummaryPriceRow(String label, String value) {
+  Widget _priceRow(
+    String label,
+    String value, {
+    bool bold = false,
+  }) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 14,
-            color: _textMuted,
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+              fontSize: bold ? 16 : 14,
+            ),
           ),
         ),
+        const SizedBox(width: 12),
         Text(
           value,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            color: _textDark,
+          style: TextStyle(
+            color: bold ? primaryGreen : Colors.black87,
+            fontWeight: bold ? FontWeight.bold : FontWeight.w600,
+            fontSize: bold ? 17 : 14,
           ),
         ),
       ],

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
 import 'home_page.dart';
 import 'report_trash_page.dart';
+import 'map_location_picker_page.dart';
 import 'my_reports_page.dart';
 import 'profile_page.dart';
 import 'worker_job_page.dart';
@@ -21,6 +23,8 @@ class MainNavigationPage extends StatefulWidget {
 class _MainNavigationPageState extends State<MainNavigationPage> {
   late int _currentIndex;
   bool _isWorkerMode = false;
+  LatLng? _homeFocusCoord;
+  Map<String, dynamic>? _pendingTrashReport;
 
   @override
   void initState() {
@@ -31,6 +35,23 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
   void _setIndex(int index) {
     setState(() {
       _currentIndex = index;
+    });
+  }
+
+  void _onTrashLocationSelected(MapLocationResult location, {bool navigateToHome = false}) {
+    setState(() {
+      _homeFocusCoord = LatLng(location.latitude, location.longitude);
+      _pendingTrashReport = {
+        'problemTitle': 'Picked Location (${location.landmark})',
+        'location': location.address,
+        'landmark': location.landmark,
+        'latitude': location.latitude,
+        'longitude': location.longitude,
+        'status': 'pending',
+      };
+      if (navigateToHome) {
+        _currentIndex = 0;
+      }
     });
   }
 
@@ -55,7 +76,11 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
 
     final pages = [
       HomePage(
+        key: ValueKey('home_${_homeFocusCoord?.latitude}_${_homeFocusCoord?.longitude}'),
         showBottomNavBar: false,
+        focusCoord: _homeFocusCoord,
+        initialFilterIndex: _homeFocusCoord != null ? 2 : 0,
+        pendingTrashReport: _pendingTrashReport,
         onNavigateToProfile: () => _setIndex(3),
         onNavigateToReport: () => _setIndex(1),
         onNavigateToMyReports: () => _setIndex(2),
@@ -65,6 +90,7 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
         onNavigateToMap: () => _setIndex(0),
         onNavigateToMyReports: () => _setIndex(2),
         onNavigateToProfile: () => _setIndex(3),
+        onLocationSelected: _onTrashLocationSelected,
       ),
       MyReportsPage(
         showBottomNavBar: false,

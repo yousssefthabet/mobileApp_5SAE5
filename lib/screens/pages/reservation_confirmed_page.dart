@@ -1,5 +1,6 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'charging_complete_page.dart';
 
 const Color _primaryGreen = Color(0xFF086B5B);
@@ -14,13 +15,19 @@ class ReservationConfirmedPage extends StatefulWidget {
   final String connectorInfo;
   final String timeSlot;
   final String heldFor;
+  final String? reservationId;
+  final String? amount;
+  final String? qrData;
 
   const ReservationConfirmedPage({
     super.key,
     this.stationName = 'Central Square Hub',
     this.connectorInfo = '1 · CCS',
     this.timeSlot = 'Today 10:30, 1 hour',
-    this.heldFor = '14:52',
+    this.heldFor = 'Confirmed',
+    this.reservationId,
+    this.amount,
+    this.qrData,
   });
 
   @override
@@ -28,10 +35,54 @@ class ReservationConfirmedPage extends StatefulWidget {
 }
 
 class _ReservationConfirmedPageState extends State<ReservationConfirmedPage> {
+  String get _effectiveQrData {
+    if (widget.qrData != null && widget.qrData!.trim().isNotEmpty) {
+      return widget.qrData!;
+    }
+    final buffer = StringBuffer();
+    buffer.writeln('=== CHARGI EV RESERVATION PASS ===');
+    if (widget.reservationId != null && widget.reservationId!.isNotEmpty) {
+      buffer.writeln('Pass ID: ${widget.reservationId}');
+    }
+    buffer.writeln('Station: ${widget.stationName}');
+    buffer.writeln('Connector: ${widget.connectorInfo}');
+    buffer.writeln('Time: ${widget.timeSlot}');
+    buffer.writeln('Status: ${widget.heldFor}');
+    if (widget.amount != null && widget.amount!.isNotEmpty) {
+      buffer.writeln('Total: ${widget.amount}');
+    }
+    buffer.writeln('Scan at charger to authenticate');
+    return buffer.toString();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _backgroundColor,
+      appBar: AppBar(
+        backgroundColor: _backgroundColor,
+        elevation: 0,
+        foregroundColor: _textDark,
+        title: const Text(
+          'Reservation Pass',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () {
+              Navigator.of(context).popUntil((route) => route.isFirst);
+            },
+            icon: const Icon(Icons.map, size: 18, color: _primaryGreen),
+            label: const Text(
+              'Map',
+              style: TextStyle(
+                color: _primaryGreen,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Column(
           children: [
@@ -63,7 +114,7 @@ class _ReservationConfirmedPageState extends State<ReservationConfirmedPage> {
 
                     // Title
                     const Text(
-                      'Spot reserved',
+                      'Reservation accepted',
                       style: TextStyle(
                         fontSize: 26,
                         fontWeight: FontWeight.w700,
@@ -76,7 +127,7 @@ class _ReservationConfirmedPageState extends State<ReservationConfirmedPage> {
 
                     // Subtitle
                     const Text(
-                      'Scan this code at the charger to start.',
+                      'Spot reserved · Scan this code at the charger to start.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 14,
@@ -87,35 +138,48 @@ class _ReservationConfirmedPageState extends State<ReservationConfirmedPage> {
 
                     const SizedBox(height: 28),
 
-                    // 2. Stylized QR Code (Figure 8)
+                    // 2. Real Scannable QR Code
                     Container(
-                      width: 170,
-                      height: 170,
+                      width: 190,
+                      height: 190,
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.04),
-                            blurRadius: 10,
-                            offset: const Offset(0, 3),
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
                           ),
                         ],
                       ),
-                      child: CustomPaint(
-                        painter: _StylizedQrPainter(color: const Color(0xFF16382F)),
+                      child: Center(
+                        child: QrImageView(
+                          data: _effectiveQrData,
+                          version: QrVersions.auto,
+                          size: 166,
+                          eyeStyle: const QrEyeStyle(
+                            eyeShape: QrEyeShape.square,
+                            color: Color(0xFF16382F),
+                          ),
+                          dataModuleStyle: const QrDataModuleStyle(
+                            dataModuleShape: QrDataModuleShape.square,
+                            color: Color(0xFF16382F),
+                          ),
+                        ),
                       ),
                     ),
 
                     const SizedBox(height: 10),
 
-                    // Sample code caption
+                    // Scannable caption
                     const Text(
-                      'Sample code, not a real QR',
+                      'Scan this QR code to view reservation details',
                       style: TextStyle(
                         fontSize: 12,
                         color: _textMuted,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
 
@@ -132,13 +196,24 @@ class _ReservationConfirmedPageState extends State<ReservationConfirmedPage> {
                       ),
                       child: Column(
                         children: [
+                          if (widget.reservationId != null && widget.reservationId!.isNotEmpty) ...[
+                            _buildDetailRow(
+                              'Pass ID',
+                              '#${widget.reservationId!.substring(0, widget.reservationId!.length > 8 ? 8 : widget.reservationId!.length)}',
+                            ),
+                            const SizedBox(height: 12),
+                          ],
                           _buildDetailRow('Station', widget.stationName),
                           const SizedBox(height: 12),
                           _buildDetailRow('Connector', widget.connectorInfo),
                           const SizedBox(height: 12),
                           _buildDetailRow('Time', widget.timeSlot),
                           const SizedBox(height: 12),
-                          _buildDetailRow('Held for', widget.heldFor),
+                          _buildDetailRow('Status', widget.heldFor),
+                          if (widget.amount != null && widget.amount!.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            _buildDetailRow('Total', widget.amount!),
+                          ],
                         ],
                       ),
                     ),
@@ -178,90 +253,123 @@ class _ReservationConfirmedPageState extends State<ReservationConfirmedPage> {
               ),
             ),
 
-            // 4. Bottom Action Buttons: Directions + Cancel (Figure 8)
+            // 4. Bottom Action Buttons: Navigate to map, Directions, Cancel
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
-              child: Row(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 50,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Starting GPS navigation to ${widget.stationName}...'),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _primaryGreen,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(25),
-                          ),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).popUntil((route) => route.isFirst);
+                      },
+                      icon: const Icon(Icons.map_outlined),
+                      label: const Text(
+                        'Navigate to map',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
                         ),
-                        child: const Text(
-                          'Directions',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                          ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primaryGreen,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(25),
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: SizedBox(
-                      height: 50,
-                      child: OutlinedButton(
-                        onPressed: () {
-                          showDialog(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              title: const Text('Cancel Reservation?'),
-                              content: const Text(
-                                'Are you sure you want to cancel your held spot?',
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SizedBox(
+                          height: 46,
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              Navigator.of(context).popUntil((route) => route.isFirst);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Starting GPS navigation to ${widget.stationName}...'),
+                                  backgroundColor: _primaryGreen,
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.navigation_outlined, size: 18),
+                            label: const Text(
+                              'Directions',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
                               ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(ctx),
-                                  child: const Text('Keep Spot'),
-                                ),
-                                TextButton(
-                                  onPressed: () {
-                                    Navigator.pop(ctx);
-                                    Navigator.of(context).popUntil((route) => route.isFirst);
-                                  },
-                                  child: const Text(
-                                    'Cancel Reservation',
-                                    style: TextStyle(color: Colors.red),
-                                  ),
-                                ),
-                              ],
                             ),
-                          );
-                        },
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: _primaryGreen, width: 1.5),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(25),
-                          ),
-                          backgroundColor: Colors.white,
-                        ),
-                        child: const Text(
-                          'Cancel',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: _primaryGreen,
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: _primaryGreen, width: 1.5),
+                              foregroundColor: _primaryGreen,
+                              backgroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(25),
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: SizedBox(
+                          height: 46,
+                          child: OutlinedButton(
+                            onPressed: () {
+                              showDialog(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('Cancel Reservation?'),
+                                  content: const Text(
+                                    'Are you sure you want to cancel your held spot?',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx),
+                                      child: const Text('Keep Spot'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () {
+                                        Navigator.pop(ctx);
+                                        Navigator.of(context).popUntil((route) => route.isFirst);
+                                      },
+                                      child: const Text(
+                                        'Cancel Reservation',
+                                        style: TextStyle(color: Colors.red),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                            style: OutlinedButton.styleFrom(
+                              side: BorderSide(color: Colors.grey.shade400, width: 1.2),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(25),
+                              ),
+                              backgroundColor: Colors.white,
+                            ),
+                            child: Text(
+                              'Cancel',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -295,49 +403,4 @@ class _ReservationConfirmedPageState extends State<ReservationConfirmedPage> {
       ],
     );
   }
-}
-
-/// Stylized pixel-matrix QR code matching Figure 8
-class _StylizedQrPainter extends CustomPainter {
-  final Color color;
-
-  _StylizedQrPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color;
-    final double block = size.width / 11;
-
-    // Pattern matrix matching the sample QR in figure 8
-    final matrix = [
-      [1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1],
-      [1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1],
-      [1, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1],
-      [0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0],
-      [1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0],
-      [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1],
-      [1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1],
-      [0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0],
-      [1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1],
-      [1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1],
-      [1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1],
-    ];
-
-    for (int r = 0; r < matrix.length; r++) {
-      for (int c = 0; c < matrix[r].length; c++) {
-        if (matrix[r][c] == 1) {
-          canvas.drawRRect(
-            RRect.fromRectAndRadius(
-              Rect.fromLTWH(c * block + 1, r * block + 1, block - 2, block - 2),
-              const Radius.circular(2),
-            ),
-            paint,
-          );
-        }
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

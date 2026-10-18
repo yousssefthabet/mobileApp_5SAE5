@@ -1,4 +1,5 @@
 // ignore_for_file: deprecated_member_use
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -115,6 +116,7 @@ class ReportDetailsPage extends StatelessWidget {
           final status = (data?['status'] as String?) ?? 'sent';
           final worker = (data?['workerName'] as String?) ?? workerName;
           final arrival = (data?['estimatedArrival'] as String?) ?? estimatedArrival;
+          final photoBase64 = data?['photoBase64'] as String?;
           final createdTime = _formatTimestamp(data?['createdAt']);
 
           return _buildContent(
@@ -126,6 +128,7 @@ class ReportDetailsPage extends StatelessWidget {
             worker: worker,
             arrival: arrival,
             sentTime: createdTime,
+            photoBase64: photoBase64,
           );
         },
       );
@@ -152,6 +155,7 @@ class ReportDetailsPage extends StatelessWidget {
     required String worker,
     required String arrival,
     required String sentTime,
+    String? photoBase64,
   }) {
     Color badgeBg;
     Color badgeText;
@@ -227,28 +231,38 @@ class ReportDetailsPage extends StatelessWidget {
                 color: const Color(0xFFDCE8E2),
                 borderRadius: BorderRadius.circular(18),
               ),
-              child: Stack(
-                children: [
-                  Center(
-                    child: Icon(
-                      Icons.image_outlined,
-                      size: 44,
-                      color: primaryGreen.withOpacity(0.35),
-                    ),
-                  ),
-                  const Positioned(
-                    bottom: 14,
-                    left: 16,
-                    child: Text(
-                      'Your photo',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF4A5C57),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: photoBase64 != null
+                    ? Image.memory(
+                        base64Decode(photoBase64),
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        height: 170,
+                      )
+                    : Stack(
+                        children: [
+                          Center(
+                            child: Icon(
+                              Icons.image_outlined,
+                              size: 44,
+                              color: primaryGreen.withOpacity(0.35),
+                            ),
+                          ),
+                          const Positioned(
+                            bottom: 14,
+                            left: 16,
+                            child: Text(
+                              'Your photo',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF4A5C57),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ),
-                ],
               ),
             ),
 

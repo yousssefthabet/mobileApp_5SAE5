@@ -8,8 +8,8 @@ import 'package:chargi/screens/auth/login_screen.dart';
 
 import 'notifications_page.dart';
 import 'charging_complete_page.dart';
-import 'payment_page.dart';
 import 'edit_profile_page.dart';
+import 'my_reservations_page.dart';
 
 class ProfilePage extends StatefulWidget {
   final VoidCallback? onNavigateToMap;
@@ -268,17 +268,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
                     _buildDivider(),
 
-                    _buildMenuItem(
-                      title: 'Payment methods',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const PaymentPage(),
-                          ),
-                        );
-                      },
-                    ),
+                    
 
                     _buildDivider(),
 
@@ -298,8 +288,18 @@ class _ProfilePageState extends State<ProfilePage> {
                     _buildDivider(),
 
                     _buildMenuItem(
-                      title: 'Language',
-                      onTap: () {},
+                      title: 'My Reservations',
+                      icon: Icons.confirmation_number_outlined,
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => MyReservationsPage(
+                              onNavigateToMap: widget.onNavigateToMap,
+                            ),
+                          ),
+                        );
+                      },
                     ),
 
                     if (widget.onSwitchToWorkerMode != null) ...[

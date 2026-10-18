@@ -11,16 +11,43 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // User profile document:
-    // Each authenticated user can only read and write their own profile
+    // User profile document and subcollections
     match /users/{userId} {
       allow read, write: if isOwner(userId);
 
-      // User's private reports subcollection:
-      // Users can only view, submit, and update their own reports
+      // Private reports subcollection
       match /reports/{reportId} {
         allow read, write: if isOwner(userId);
       }
+
+      // Private reservations subcollection
+      match /reservations/{reservationId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // EV Chargers: public read for map; update allowed for connector status
+    match /ev_chargers/{chargerId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Kiosks: public read for map
+    match /kiosk/{kioskId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Top-level reservations collection
+    match /reservations/{reservationId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Top-level reports collection
+    match /reports/{reportId} {
+      allow read: if true;
+      allow write: if true;
     }
 
     // Default deny for any unmatched document or collection

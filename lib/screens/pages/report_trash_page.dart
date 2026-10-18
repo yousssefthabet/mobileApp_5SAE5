@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -11,6 +12,7 @@ class ReportTrashPage extends StatefulWidget {
   final VoidCallback? onNavigateToMap;
   final VoidCallback? onNavigateToMyReports;
   final VoidCallback? onNavigateToProfile;
+  final void Function(MapLocationResult location, {bool navigateToHome})? onLocationSelected;
   final bool showBottomNavBar;
 
   const ReportTrashPage({
@@ -18,6 +20,7 @@ class ReportTrashPage extends StatefulWidget {
     this.onNavigateToMap,
     this.onNavigateToMyReports,
     this.onNavigateToProfile,
+    this.onLocationSelected,
     this.showBottomNavBar = true,
   });
 
@@ -307,14 +310,20 @@ class _ReportTrashPageState extends State<ReportTrashPage> {
         _isLocationChangedFromMap = true;
       });
 
+      widget.onLocationSelected?.call(result, navigateToHome: result.viewOnHomeMap);
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Location selected: ${result.landmark}'),
-            backgroundColor: primaryGreen,
-            duration: const Duration(seconds: 2),
-          ),
-        );
+        if (result.viewOnHomeMap && widget.onNavigateToMap != null) {
+          widget.onNavigateToMap!();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Location selected: ${result.landmark}'),
+              backgroundColor: primaryGreen,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
       }
     }
   }
@@ -361,6 +370,7 @@ class _ReportTrashPageState extends State<ReportTrashPage> {
         'workerName': 'Unassigned',
         'estimatedArrival': 'Reviewing report',
         'hasPhoto': _imageBytes != null,
+        if (_imageBytes != null) 'photoBase64': base64Encode(_imageBytes!),
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
