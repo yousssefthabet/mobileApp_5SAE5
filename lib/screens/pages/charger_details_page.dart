@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'reserve_spot_page.dart';
+import 'package:chargi/services/station_availability_service.dart';
 
 class ChargerDetailsPage extends StatelessWidget {
   final String? chargerId;
@@ -168,6 +169,9 @@ class ChargerDetailsPage extends StatelessWidget {
       );
     }
 
+    // Check and release any expired reservation on this charger
+    StationAvailabilityService.instance.checkAndReleaseCharger(chargerId!);
+
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('ev_chargers')
@@ -222,15 +226,9 @@ class ChargerDetailsPage extends StatelessWidget {
             final status =
                 (connector['status']?.toString() ?? 'unknown').toLowerCase();
 
-            final isFree = status == 'free';
+            final isFree = StationAvailabilityService.instance.isConnectorFree(connector);
             final isOutOfService = status == 'out_of_service';
-
-            final statusText = switch (status) {
-              'free' => 'Free',
-              'busy' => 'Busy',
-              'out_of_service' => 'Out of service',
-              _ => 'Unavailable',
-            };
+            final statusText = StationAvailabilityService.instance.getConnectorStatusText(connector);
 
             final statusBackground = isFree
                 ? badgeGreenBg

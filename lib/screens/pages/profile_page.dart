@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -10,6 +9,9 @@ import 'notifications_page.dart';
 import 'charging_complete_page.dart';
 import 'edit_profile_page.dart';
 import 'my_reservations_page.dart';
+import 'rewards_page.dart';
+import 'package:chargi/services/station_availability_service.dart';
+import 'package:chargi/services/reward_service.dart';
 
 class ProfilePage extends StatefulWidget {
   final VoidCallback? onNavigateToMap;
@@ -35,14 +37,18 @@ class _ProfilePageState extends State<ProfilePage> {
   static const Color primaryGreen = Color(0xFF086B5B);
   static const Color backgroundColor = Color(0xFFF7F9F8);
   static const Color cardBorderColor = Color(0xFFE8ECEB);
+  static const Color goldAccent = Color(0xFFD97706);
 
   int _reportsSent = 0;
   int _reportsResolved = 0;
+  int _userPoints = 0;
+  int _totalReservations = 0;
   bool _metricsLoaded = false;
   String _userName = '';
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _reportsSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _reservationsSub;
 
   @override
   void initState() {
@@ -54,7 +60,21 @@ class _ProfilePageState extends State<ProfilePage> {
   void dispose() {
     _reportsSub?.cancel();
     _userSub?.cancel();
+    _reservationsSub?.cancel();
     super.dispose();
+  }
+
+  Future<void> _refreshUserPoints() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final pts = await RewardService.instance.getUserPoints(user.uid);
+      if (mounted) {
+        setState(() {
+          _userPoints = pts;
+        });
+      }
+    } catch (_) {}
   }
 
   void _initListeners() {
@@ -64,7 +84,7 @@ class _ProfilePageState extends State<ProfilePage> {
       return;
     }
 
-    // Listen to user document for real-time name changes
+    // 1. Listen to user document for real-time name & points changes
     _userSub = FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
@@ -72,15 +92,62 @@ class _ProfilePageState extends State<ProfilePage> {
         .listen((doc) {
       if (!mounted) return;
       if (doc.exists) {
+        final data = doc.data();
+        final docPoints = (data?['rewardPoints'] as num?)?.toInt() ?? 0;
         setState(() {
-          _userName = (doc.data()?['name'] as String?) ?? user.displayName ?? '';
+          _userName = (data?['name'] as String?) ?? user.displayName ?? '';
+          _userPoints = docPoints;
         });
       }
     }, onError: (e) {
       debugPrint('Error listening to user document: $e');
     });
 
-    // Listen to reports subcollection for real-time metric counts
+    // 2. Listen to reservations subcollection for real-time points updates after each reservation
+    _reservationsSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('reservations')
+        .snapshots()
+        .listen((resSnap) async {
+      int count = resSnap.docs.length;
+      List<Map<String, dynamic>> resList = resSnap.docs.map((d) => d.data()).toList();
+
+      // Fallback check on top-level collection if user subcollection is empty
+      if (count == 0) {
+        try {
+          final topSnap = await FirebaseFirestore.instance
+              .collection('reservations')
+              .where('userId', isEqualTo: user.uid)
+              .get();
+          if (topSnap.docs.isNotEmpty) {
+            count = topSnap.docs.length;
+            resList = topSnap.docs.map((d) => d.data()).toList();
+          }
+        } catch (_) {}
+      }
+
+      final pointsFromReservations = RewardService.instance.calculatePointsFromReservations(resList);
+
+      if (!mounted) return;
+      setState(() {
+        _totalReservations = count;
+        _userPoints = pointsFromReservations;
+      });
+
+      // Synchronize points to user document so it is persisted
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+          'rewardPoints': pointsFromReservations,
+          'totalReservations': count,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (_) {}
+    }, onError: (e) {
+      debugPrint('Error listening to user reservations: $e');
+    });
+
+    // 3. Listen to reports subcollection for real-time metric counts
     _reportsSub = FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
@@ -129,6 +196,8 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final hasUnlockedPromo = _userPoints >= 100;
+
     return Scaffold(
       backgroundColor: backgroundColor,
       body: SafeArea(
@@ -194,9 +263,120 @@ class _ProfilePageState extends State<ProfilePage> {
                 ],
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
 
-              // 2. Three Metric Cards (real data from Firestore)
+              // 2. Loyalty Rewards Banner
+              InkWell(
+                onTap: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const RewardsPage(),
+                    ),
+                  );
+                  if (mounted) {
+                    setState(() {});
+                  }
+                },
+                borderRadius: BorderRadius.circular(18),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF086B5B), Color(0xFF0F8A76)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: primaryGreen.withValues(alpha: 0.15),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.18),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.stars_rounded,
+                          color: Colors.amberAccent,
+                          size: 28,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  '$_userPoints Points',
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    '+10 pts / résa ($_totalReservations résa)',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              hasUnlockedPromo
+                                  ? '🎉 Code promo 30% débloqué (PROMO30 · Usage unique) !'
+                                  : 'Plus que ${(100 - _userPoints).clamp(0, 100)} pts pour débloquer le code 30% (Usage unique)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: hasUnlockedPromo
+                                    ? Colors.amberAccent
+                                    : Colors.white70,
+                                fontWeight: hasUnlockedPromo
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right,
+                        color: Colors.white70,
+                        size: 22,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // 3. Metric Cards (real data from Firestore)
               Row(
                 children: [
                   _buildMetricCard(
@@ -210,15 +390,16 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   const SizedBox(width: 12),
                   _buildMetricCard(
-                    count: '0',
-                    label: 'Charges',
+                    count: '$_userPoints pts',
+                    label: 'Points fidélité',
+                    highlightColor: primaryGreen,
                   ),
                 ],
               ),
 
               const SizedBox(height: 24),
 
-              // 3. Settings / Options List
+              // 4. Settings / Options List
               Container(
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -239,15 +420,56 @@ class _ProfilePageState extends State<ProfilePage> {
                   children: [
                     _buildMenuItem(
                       title: 'Edit Profile',
+                      icon: Icons.person_outline,
                       onTap: () async {
                         await Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) =>
-                                const EditProfilePage(),
+                            builder: (_) => const EditProfilePage(),
                           ),
                         );
-                        if (mounted) setState(() {});
+                        if (mounted) {
+                          _refreshUserPoints();
+                        }
+                      },
+                    ),
+
+                    _buildDivider(),
+
+                    // Loyalty & Rewards Option
+                    _buildMenuItem(
+                      title: 'Fidélité & Récompenses',
+                      icon: Icons.card_giftcard,
+                      trailingWidget: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: hasUnlockedPromo
+                              ? const Color(0xFFFAF5E9)
+                              : const Color(0xFFE2EFEA),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          hasUnlockedPromo ? '-30% dispo' : '$_userPoints pts',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: hasUnlockedPromo ? goldAccent : primaryGreen,
+                          ),
+                        ),
+                      ),
+                      onTap: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const RewardsPage(),
+                          ),
+                        );
+                        if (mounted) {
+                          _refreshUserPoints();
+                        }
                       },
                     ),
 
@@ -255,12 +477,12 @@ class _ProfilePageState extends State<ProfilePage> {
 
                     _buildMenuItem(
                       title: 'Charging history',
+                      icon: Icons.history,
                       onTap: () {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) =>
-                                const ChargingCompletePage(),
+                            builder: (_) => const ChargingCompletePage(),
                           ),
                         );
                       },
@@ -268,18 +490,14 @@ class _ProfilePageState extends State<ProfilePage> {
 
                     _buildDivider(),
 
-                    
-
-                    _buildDivider(),
-
                     _buildMenuItem(
                       title: 'Notifications',
+                      icon: Icons.notifications_none,
                       onTap: () {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) =>
-                                const NotificationsPage(),
+                            builder: (_) => const NotificationsPage(),
                           ),
                         );
                       },
@@ -290,8 +508,26 @@ class _ProfilePageState extends State<ProfilePage> {
                     _buildMenuItem(
                       title: 'My Reservations',
                       icon: Icons.confirmation_number_outlined,
-                      onTap: () {
-                        Navigator.push(
+                      trailingWidget: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE2EFEA),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '$_totalReservations',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: primaryGreen,
+                          ),
+                        ),
+                      ),
+                      onTap: () async {
+                        await Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (_) => MyReservationsPage(
@@ -299,6 +535,9 @@ class _ProfilePageState extends State<ProfilePage> {
                             ),
                           ),
                         );
+                        if (mounted) {
+                          _refreshUserPoints();
+                        }
                       },
                     ),
 
@@ -311,6 +550,30 @@ class _ProfilePageState extends State<ProfilePage> {
                         onTap: widget.onSwitchToWorkerMode!,
                       ),
                     ],
+
+                    _buildDivider(),
+
+                    // Reset / Free Stations (Demo utility)
+                    _buildMenuItem(
+                      title: 'Libérer les bornes (Mode Test)',
+                      icon: Icons.lock_open_rounded,
+                      textColor: const Color(0xFF0284C7),
+                      onTap: () async {
+                        final released = await StationAvailabilityService.instance
+                            .forceReleaseAllBusyStations();
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              released > 0
+                                  ? '$released connecteur(s) libéré(s) avec succès !'
+                                  : 'Toutes les bornes sont déjà libres et disponibles.',
+                            ),
+                            backgroundColor: primaryGreen,
+                          ),
+                        );
+                      },
+                    ),
 
                     _buildDivider(),
 
@@ -341,11 +604,9 @@ class _ProfilePageState extends State<ProfilePage> {
               onTap: (index) {
                 if (index == 0 && widget.onNavigateToMap != null) {
                   widget.onNavigateToMap!();
-                } else if (index == 1 &&
-                    widget.onNavigateToReport != null) {
+                } else if (index == 1 && widget.onNavigateToReport != null) {
                   widget.onNavigateToReport!();
-                } else if (index == 2 &&
-                    widget.onNavigateToMyReports != null) {
+                } else if (index == 2 && widget.onNavigateToMyReports != null) {
                   widget.onNavigateToMyReports!();
                 }
               },
@@ -354,11 +615,11 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-
   // Metric card
   Widget _buildMetricCard({
     required String count,
     required String label,
+    Color? highlightColor,
   }) {
     return Expanded(
       child: Container(
@@ -386,10 +647,10 @@ class _ProfilePageState extends State<ProfilePage> {
           children: [
             Text(
               count,
-              style: const TextStyle(
-                fontSize: 22,
+              style: TextStyle(
+                fontSize: 20,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFF1E2926),
+                color: highlightColor ?? const Color(0xFF1E2926),
               ),
             ),
             const SizedBox(height: 4),
@@ -412,6 +673,7 @@ class _ProfilePageState extends State<ProfilePage> {
     required String title,
     Color? textColor,
     IconData? icon,
+    Widget? trailingWidget,
     bool hideTrailing = false,
     required VoidCallback onTap,
   }) {
@@ -443,6 +705,10 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
               ),
             ),
+            if (trailingWidget != null) ...[
+              trailingWidget,
+              const SizedBox(width: 8),
+            ],
             if (!hideTrailing)
               const Icon(
                 Icons.chevron_right,
@@ -509,12 +775,10 @@ class _ProfilePageState extends State<ProfilePage> {
     if (shouldLogout != true) return;
 
     try {
-      // Actually sign out of Firebase.
       await FirebaseAuth.instance.signOut();
 
       if (!context.mounted) return;
 
-      // Clear the navigation stack and open the login screen.
       Navigator.of(context, rootNavigator: true)
           .pushAndRemoveUntil(
         MaterialPageRoute<void>(

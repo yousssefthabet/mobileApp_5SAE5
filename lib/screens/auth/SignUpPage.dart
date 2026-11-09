@@ -73,6 +73,7 @@ class _SignUpPageState extends State<SignUpPage> {
             .set({
           'name': _nameCtrl.text.trim(),
           'email': _emailCtrl.text.trim(),
+          'rewardPoints': 0,
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));

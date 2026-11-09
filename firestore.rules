@@ -24,6 +24,16 @@ service cloud.firestore {
       match /reservations/{reservationId} {
         allow read, write: if isOwner(userId);
       }
+
+      // Private reward history subcollection
+      match /reward_history/{historyId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Private promo codes subcollection
+      match /promo_codes/{codeId} {
+        allow read, write: if isOwner(userId);
+      }
     }
 
     // EV Chargers: public read for map; update allowed for connector status

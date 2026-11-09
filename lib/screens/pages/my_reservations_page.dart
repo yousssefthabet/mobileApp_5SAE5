@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'reservation_confirmed_page.dart';
+import 'package:chargi/services/station_availability_service.dart';
 
 class MyReservationsPage extends StatefulWidget {
   final VoidCallback? onNavigateToMap;
@@ -22,8 +23,9 @@ class _MyReservationsPageState extends State<MyReservationsPage> {
   static const Color cardBorderColor = Color(0xFFE8ECEB);
   static const Color textDark = Color(0xFF1E2926);
   static const Color textMuted = Color(0xFF7A8B86);
+  static const Color goldAccent = Color(0xFFD97706);
 
-  int _selectedTab = 0; // 0: All, 1: Active, 2: Completed
+  int _selectedTab = 0; // 0: All, 1: Active, 2: Completed / Expired
 
   String _formatDateTime(dynamic startVal, int? durationMin) {
     if (startVal is Timestamp) {
@@ -36,7 +38,43 @@ class _MyReservationsPageState extends State<MyReservationsPage> {
       final dur = durationMin != null ? ' · $durationMin min' : '';
       return '$day/$month/$year $hour:$minute$dur';
     }
-    return 'Confirmed slot';
+    return 'Créneau réservé';
+  }
+
+  String _formatTimeOnly(DateTime dt) {
+    final hour = dt.hour.toString().padLeft(2, '0');
+    final minute = dt.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  DateTime? _extractEndDateTime(Map<String, dynamic> res) {
+    if (res['endDateTime'] is Timestamp) {
+      return (res['endDateTime'] as Timestamp).toDate();
+    }
+    if (res['startDateTime'] is Timestamp) {
+      final start = (res['startDateTime'] as Timestamp).toDate();
+      final durationMin = (res['durationMinutes'] as num?)?.toInt() ?? 30;
+      return start.add(Duration(minutes: durationMin));
+    }
+    return null;
+  }
+
+  bool _isReservationCancelled(Map<String, dynamic> res) {
+    final status = res['reservationStatus']?.toString().toLowerCase();
+    return status == 'cancelled' || status == 'annulée';
+  }
+
+  bool _isReservationExpired(Map<String, dynamic> res) {
+    if (_isReservationCancelled(res)) return false;
+    final endTime = _extractEndDateTime(res);
+    if (endTime == null) return false;
+    return DateTime.now().isAfter(endTime);
+  }
+
+  bool _isReservationActive(Map<String, dynamic> res) {
+    if (_isReservationCancelled(res)) return false;
+    if (_isReservationExpired(res)) return false;
+    return true;
   }
 
   String _buildQrPayload(Map<String, dynamic> res) {
@@ -61,11 +99,30 @@ Scan at charger to authenticate''';
   void _openQrPass(Map<String, dynamic> res) {
     final station = res['stationName']?.toString() ?? 'Charging Station';
     final connector = res['connectorName']?.toString() ?? 'Connector';
-    final timeStr = _formatDateTime(res['startDateTime'], res['durationMinutes']);
+    final durationMin = (res['durationMinutes'] as num?)?.toInt() ?? 30;
+    final timeStr = _formatDateTime(res['startDateTime'], durationMin);
     final amount = res['amount'] != null
         ? '${res['amount']} ${res['currency'] ?? 'TND'}'
         : '';
     final qrData = _buildQrPayload(res);
+
+    final discountAmount = res['discountAmount'] != null && (res['discountAmount'] as num) > 0
+        ? '${res['discountAmount']} ${res['currency'] ?? 'TND'}'
+        : null;
+    final discountApplied = discountAmount != null;
+    final pointsEarned = (res['rewardPointsEarned'] as num?)?.toInt() ?? 10;
+
+    final endTime = _extractEndDateTime(res);
+    final rawConnId = res['connectorId'];
+    final connectorId = rawConnId is num ? rawConnId.toInt() : int.tryParse(rawConnId?.toString() ?? '');
+    final chargerId = res['chargerId']?.toString();
+
+    String heldFor = 'Confirmed';
+    if (_isReservationCancelled(res)) {
+      heldFor = 'Cancelled';
+    } else if (_isReservationExpired(res)) {
+      heldFor = 'Expired';
+    }
 
     Navigator.push(
       context,
@@ -74,13 +131,77 @@ Scan at charger to authenticate''';
           stationName: station,
           connectorInfo: connector,
           timeSlot: timeStr,
-          heldFor: 'Confirmed',
+          heldFor: heldFor,
           reservationId: res['id']?.toString(),
           amount: amount,
           qrData: qrData,
+          pointsEarned: pointsEarned,
+          discountApplied: discountApplied,
+          discountAmount: discountAmount,
+          chargerId: chargerId,
+          connectorId: connectorId,
+          endDateTime: endTime,
+          durationMinutes: durationMin,
         ),
       ),
     );
+  }
+
+  Future<void> _cancelReservation(Map<String, dynamic> res) async {
+    final stationName = res['stationName']?.toString() ?? 'cette station';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Annuler la réservation ?'),
+        content: Text(
+          'Voulez-vous vraiment annuler votre réservation pour $stationName ?\n\n'
+          'La borne sera immédiatement libérée et redeviendra disponible pour les autres conducteurs.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Garder ma réservation'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Annuler et libérer la borne'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final reservationId = res['id']?.toString() ?? '';
+    final chargerId = res['chargerId']?.toString();
+    final rawConnId = res['connectorId'];
+    final connectorId = rawConnId is num ? rawConnId.toInt() : int.tryParse(rawConnId?.toString() ?? '');
+
+    final success = await StationAvailabilityService.instance.cancelReservationAndReleaseStation(
+      reservationId: reservationId,
+      chargerId: chargerId,
+      connectorId: connectorId,
+      userId: res['userId']?.toString(),
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success
+                ? 'Réservation annulée (-10 points fidélité) et borne libérée avec succès !'
+                : 'Erreur lors de l\'annulation de la réservation.',
+          ),
+          backgroundColor: success ? primaryGreen : Colors.red,
+        ),
+      );
+      setState(() {});
+    }
   }
 
   Stream<List<Map<String, dynamic>>> _getReservationsStream() {
@@ -144,7 +265,7 @@ Scan at charger to authenticate''';
         foregroundColor: textDark,
         elevation: 0,
         title: const Text(
-          'My Reservations',
+          'Mes Réservations',
           style: TextStyle(
             fontWeight: FontWeight.bold,
             fontSize: 20,
@@ -166,9 +287,9 @@ Scan at charger to authenticate''';
                 ),
                 child: Row(
                   children: [
-                    _buildTabButton('All', 0),
-                    _buildTabButton('Active', 1),
-                    _buildTabButton('Completed', 2),
+                    _buildTabButton('Toutes', 0),
+                    _buildTabButton('Actives', 1),
+                    _buildTabButton('Terminées', 2),
                   ],
                 ),
               ),
@@ -190,7 +311,7 @@ Scan at charger to authenticate''';
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          'Could not load reservations: ${snapshot.error}',
+                          'Impossible de charger les réservations: ${snapshot.error}',
                           textAlign: TextAlign.center,
                           style: const TextStyle(color: textMuted),
                         ),
@@ -199,23 +320,12 @@ Scan at charger to authenticate''';
                   }
 
                   final allReservations = snapshot.data ?? [];
-                  final now = DateTime.now();
 
                   final filteredReservations = allReservations.where((res) {
+                    final isActive = _isReservationActive(res);
                     if (_selectedTab == 0) return true;
-
-                    DateTime? startTime;
-                    if (res['startDateTime'] is Timestamp) {
-                      startTime = (res['startDateTime'] as Timestamp).toDate();
-                    }
-                    final durationMin = res['durationMinutes'] is num
-                        ? (res['durationMinutes'] as num).toInt()
-                        : 60;
-                    final endTime = startTime?.add(Duration(minutes: durationMin));
-                    final isPast = endTime?.isBefore(now) ?? false;
-
-                    if (_selectedTab == 1) return !isPast; // Active
-                    return isPast; // Completed
+                    if (_selectedTab == 1) return isActive; // Actives
+                    return !isActive; // Terminées ou annulées
                   }).toList();
 
                   if (filteredReservations.isEmpty) {
@@ -273,23 +383,58 @@ Scan at charger to authenticate''';
   }
 
   Widget _buildReservationCard(Map<String, dynamic> res) {
-    final stationName = res['stationName']?.toString() ?? 'Charging Station';
-    final connectorName = res['connectorName']?.toString() ?? 'Standard Connector';
+    final stationName = res['stationName']?.toString() ?? 'Borne de recharge';
+    final connectorName = res['connectorName']?.toString() ?? 'Connecteur standard';
     final timeStr = _formatDateTime(res['startDateTime'], res['durationMinutes']);
     final amount = res['amount'] != null
         ? '${res['amount']} ${res['currency'] ?? 'TND'}'
-        : 'Paid';
+        : 'Payé';
+    final hasPromo = res['discountAmount'] != null && (res['discountAmount'] as num) > 0;
+    final pointsEarned = (res['rewardPointsEarned'] as num?)?.toInt() ?? 10;
+
+    final isCancelled = _isReservationCancelled(res);
+    final isExpired = _isReservationExpired(res);
+    final isActive = _isReservationActive(res);
+
+    final endTime = _extractEndDateTime(res);
+    final now = DateTime.now();
+    final remainingMinutes = (endTime != null && isActive)
+        ? endTime.difference(now).inMinutes.clamp(0, 9999)
+        : 0;
+    final formattedEnd = endTime != null ? _formatTimeOnly(endTime) : null;
+
+    // Status badge configurations
+    final Color badgeBg;
+    final Color badgeText;
+    final String badgeLabel;
+
+    if (isCancelled) {
+      badgeBg = const Color(0xFFFEE2E2);
+      badgeText = const Color(0xFFDC2626);
+      badgeLabel = 'Annulée';
+    } else if (isExpired) {
+      badgeBg = const Color(0xFFF3F4F6);
+      badgeText = const Color(0xFF6B7280);
+      badgeLabel = 'Expirée';
+    } else {
+      badgeBg = const Color(0xFFE4F3EE);
+      badgeText = primaryGreen;
+      badgeLabel = 'Active';
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: cardBorderColor, width: 1),
+        border: Border.all(
+          color: isActive ? primaryGreen.withValues(alpha: 0.25) : cardBorderColor,
+          width: isActive ? 1.5 : 1,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 6,
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
             offset: const Offset(0, 2),
           ),
         ],
@@ -302,7 +447,7 @@ Scan at charger to authenticate''';
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header: Station name + Status badge
+              // Header: Station icon + Names + Status Badge
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -310,12 +455,16 @@ Scan at charger to authenticate''';
                     width: 44,
                     height: 44,
                     decoration: BoxDecoration(
-                      color: lightMint,
+                      color: isCancelled
+                          ? const Color(0xFFFEE2E2)
+                          : (isActive ? lightMint : const Color(0xFFF3F4F6)),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.ev_station,
-                      color: primaryGreen,
+                      color: isCancelled
+                          ? const Color(0xFFDC2626)
+                          : (isActive ? primaryGreen : const Color(0xFF9CA3AF)),
                       size: 24,
                     ),
                   ),
@@ -346,13 +495,13 @@ Scan at charger to authenticate''';
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFE4F3EE),
+                      color: badgeBg,
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Text(
-                      'Confirmed',
+                    child: Text(
+                      badgeLabel,
                       style: TextStyle(
-                        color: primaryGreen,
+                        color: badgeText,
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
                       ),
@@ -361,7 +510,87 @@ Scan at charger to authenticate''';
                 ],
               ),
 
-              const Divider(height: 24, color: Color(0xFFF0F4F2)),
+              // Expiration deadline banner
+              if (isActive && formattedEnd != null)
+                Container(
+                  margin: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE8F5E9),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFC8E6C9)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.timer_outlined, size: 16, color: primaryGreen),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Expire à $formattedEnd (dans $remainingMinutes min) · Libération auto',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: primaryGreen,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else if (isCancelled)
+                Container(
+                  margin: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF2F2),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFFECACA)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.cancel_outlined, size: 16, color: Color(0xFFDC2626)),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Réservation annulée · Borne libérée',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFDC2626),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else if (isExpired && formattedEnd != null)
+                Container(
+                  margin: const EdgeInsets.only(top: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.history, size: 16, color: Colors.grey.shade600),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Échéance dépassée ($formattedEnd) · Borne libérée',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              const Divider(height: 22, color: Color(0xFFF0F4F2)),
 
               // Info rows: Time & Price
               Row(
@@ -389,32 +618,180 @@ Scan at charger to authenticate''';
                 ],
               ),
 
+              const SizedBox(height: 10),
+
+              // Rewards & Promo tags
+              Row(
+                children: [
+                  if (isCancelled)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEE2E2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.cancel_outlined,
+                            color: Color(0xFFDC2626),
+                            size: 14,
+                          ),
+                          SizedBox(width: 4),
+                          Text(
+                            '0 pt (Réservation annulée)',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFFDC2626),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (pointsEarned > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE2EFEA),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.stars_rounded,
+                            color: goldAccent,
+                            size: 14,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '+$pointsEarned pts gagnés',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: primaryGreen,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (hasPromo) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFAF5E9),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.amber.shade200),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.discount,
+                            color: goldAccent,
+                            size: 12,
+                          ),
+                          SizedBox(width: 4),
+                          Text(
+                            '-30% Promo',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF854D0E),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+
               const SizedBox(height: 14),
 
-              // View QR Code button
-              SizedBox(
-                width: double.infinity,
-                height: 42,
-                child: ElevatedButton.icon(
-                  onPressed: () => _openQrPass(res),
-                  icon: const Icon(Icons.qr_code, size: 18),
-                  label: const Text(
-                    'View QR Pass',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
+              // Action buttons: QR Pass + Annuler if active
+              if (isActive)
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: SizedBox(
+                        height: 42,
+                        child: ElevatedButton.icon(
+                          onPressed: () => _openQrPass(res),
+                          icon: const Icon(Icons.qr_code, size: 18),
+                          label: const Text(
+                            'Voir Pass QR',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryGreen,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryGreen,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: SizedBox(
+                        height: 42,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _cancelReservation(res),
+                          icon: const Icon(Icons.cancel_outlined, size: 16),
+                          label: const Text(
+                            'Annuler',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFDC2626),
+                            side: const BorderSide(color: Color(0xFFFCA5A5)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              else
+                SizedBox(
+                  width: double.infinity,
+                  height: 42,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _openQrPass(res),
+                    icon: const Icon(Icons.qr_code, size: 18),
+                    label: const Text(
+                      'Voir Détails & QR Pass',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: textDark,
+                      side: const BorderSide(color: cardBorderColor),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
@@ -444,7 +821,7 @@ Scan at charger to authenticate''';
             ),
             const SizedBox(height: 20),
             const Text(
-              'No reservations yet',
+              'Aucune réservation trouvée',
               style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
@@ -453,7 +830,7 @@ Scan at charger to authenticate''';
             ),
             const SizedBox(height: 8),
             const Text(
-              'Reserve an EV charging station on the map to see your bookings and QR passes here.',
+              'Réservez une borne de recharge sur la carte pour voir vos créneaux et passes QR ici.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 14,
@@ -471,7 +848,7 @@ Scan at charger to authenticate''';
               },
               icon: const Icon(Icons.map_outlined, size: 18),
               label: const Text(
-                'Explore Charging Stations',
+                'Explorer les bornes',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
               style: ElevatedButton.styleFrom(
