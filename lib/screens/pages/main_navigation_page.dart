@@ -1,5 +1,11 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:chargi/features/chatbot/presentation/pages/chatbot_page.dart';
+import 'package:chargi/features/users/data/user_role_repository.dart';
+import 'package:chargi/features/users/domain/user_role.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
 import 'home_page.dart';
 import 'report_trash_page.dart';
@@ -26,10 +32,35 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
   LatLng? _homeFocusCoord;
   Map<String, dynamic>? _pendingTrashReport;
 
+  // Role of the signed-in user, read live from users/{uid}. Until it is known
+  // (or if it cannot be read) it stays `user`: no worker access.
+  UserRole _role = UserRole.user;
+  StreamSubscription<UserRole>? _roleSub;
+
   @override
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex;
+    _listenToRole();
+  }
+
+  @override
+  void dispose() {
+    _roleSub?.cancel();
+    super.dispose();
+  }
+
+  void _listenToRole() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    _roleSub = UserRoleRepository().watchRole(uid).listen((role) {
+      if (!mounted) return;
+      setState(() {
+        _role = role;
+        // Demoted while in worker mode: leave it immediately.
+        if (!role.canUseWorkerPortal) _isWorkerMode = false;
+      });
+    });
   }
 
   void _setIndex(int index) {
@@ -57,7 +88,8 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isWorkerMode) {
+    // Both conditions are required: the flag alone never opens the portal.
+    if (_isWorkerMode && _role.canUseWorkerPortal) {
       return WorkerJobPage(
         onNavigateToHome: () {
           setState(() {
@@ -99,16 +131,23 @@ class _MainNavigationPageState extends State<MainNavigationPage> {
         onNavigateToProfile: () => _setIndex(3),
       ),
       ProfilePage(
+        role: _role,
         showBottomNavBar: false,
         onNavigateToMap: () => _setIndex(0),
         onNavigateToReport: () => _setIndex(1),
         onNavigateToMyReports: () => _setIndex(2),
-        onSwitchToWorkerMode: () {
-          setState(() {
-            _isWorkerMode = true;
-          });
-        },
+        // null hides the "Worker portal" entry for non-workers.
+        onSwitchToWorkerMode: _role.canUseWorkerPortal
+            ? () {
+                setState(() {
+                  _isWorkerMode = true;
+                });
+              }
+            : null,
       ),
+      // Citizen-facing AI assistant (index 4). Worker mode renders its own
+      // screen above, so workers never see this tab.
+      ChatbotPage(isActive: _currentIndex == 4),
     ];
 
     return Scaffold(

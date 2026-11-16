@@ -1,7 +1,7 @@
 
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+
+import 'package:chargi/features/reservations/data/reservation_repository.dart';
 
 import 'reservation_confirmed_page.dart';
 
@@ -44,10 +44,11 @@ class _PaymentPageState extends State<PaymentPage> {
 
   bool _isProcessing = false;
 
+  final ReservationRepository _reservations = ReservationRepository();
+
   Future<void> _confirmDemoPayment() async {
     if (_isProcessing) return;
 
-    final user = FirebaseAuth.instance.currentUser;
     final now = DateTime.now();
 
     // Allow immediate reservation within a 15-minute tolerance
@@ -64,114 +65,25 @@ class _PaymentPageState extends State<PaymentPage> {
     setState(() => _isProcessing = true);
 
     try {
-      final firestore = FirebaseFirestore.instance;
-      final reservationId = firestore.collection('reservations').doc().id;
-      final reservationData = {
-        'id': reservationId,
-        'userId': user?.uid ?? 'guest_user',
-        'userEmail': user?.email ?? 'guest@example.com',
-        'chargerId': widget.chargerId,
-        'stationName': widget.stationName,
-        'connectorId': widget.connectorId,
-        'connectorName': widget.connectorName,
-        'startDateTime': Timestamp.fromDate(widget.startDateTime),
-        'durationMinutes': widget.durationMinutes,
-        'amount': widget.amount,
-        'currency': 'TND',
-        'paymentMethod': 'bank_card',
-        'paymentStatus': 'paid',
-        'reservationStatus': 'confirmed',
-        'createdAt': FieldValue.serverTimestamp(),
-      };
-
-      // 1. Record under user's private reservations collection
-      if (user != null) {
-        try {
-          await firestore
-              .collection('users')
-              .doc(user.uid)
-              .collection('reservations')
-              .doc(reservationId)
-              .set(reservationData);
-        } catch (e) {
-          debugPrint('Could not save user private reservation: $e');
-        }
-      }
-
-      // 2. Update ev_chargers connector status to busy
-      try {
-        final chargerRef =
-            firestore.collection('ev_chargers').doc(widget.chargerId);
-        final chargerDoc = await chargerRef.get();
-        if (chargerDoc.exists) {
-          final chargerData = chargerDoc.data();
-          final rawConnectors = chargerData?['connectors'];
-          if (rawConnectors is List) {
-            final connectors = rawConnectors.map((item) {
-              return Map<String, dynamic>.from(item as Map);
-            }).toList();
-
-            int targetIndex = -1;
-
-            // 1. Try matching by connectorId / id / connector_id
-            targetIndex = connectors.indexWhere((c) {
-              final raw = c['connectorId'] ?? c['id'] ?? c['connector_id'];
-              final id = raw is num
-                  ? raw.toInt()
-                  : int.tryParse(raw?.toString() ?? '');
-              return id != null && id == widget.connectorId;
-            });
-
-            // 2. Try 1-based index (e.g. connectorId 1 -> index 0)
-            if (targetIndex == -1 &&
-                widget.connectorId > 0 &&
-                widget.connectorId <= connectors.length) {
-              targetIndex = widget.connectorId - 1;
-            }
-
-            // 3. Try 0-based index
-            if (targetIndex == -1 &&
-                widget.connectorId >= 0 &&
-                widget.connectorId < connectors.length) {
-              targetIndex = widget.connectorId;
-            }
-
-            // 4. Fallback: first free connector
-            if (targetIndex == -1) {
-              targetIndex = connectors.indexWhere((c) =>
-                  c['status']?.toString().toLowerCase() == 'free');
-            }
-
-            if (targetIndex != -1) {
-              connectors[targetIndex]['status'] = 'busy';
-              await chargerRef.update({'connectors': connectors});
-              debugPrint('SUCCESS: Connector at index $targetIndex updated to busy');
-            } else {
-              debugPrint('WARNING: Could not find connector index to mark as busy');
-            }
-          }
-        }
-      } catch (e) {
-        debugPrint('Could not update charger connectors: $e');
-      }
-
-      // 3. Save to top-level reservations collection
-      try {
-        await firestore
-            .collection('reservations')
-            .doc(reservationId)
-            .set(reservationData);
-      } catch (e) {
-        debugPrint('Could not save top-level reservation: $e');
-      }
+      // The server checks availability, prices the booking and writes it
+      // inside a transaction. Nothing is confirmed until this call succeeds.
+      final reservation = await _reservations.createReservation(
+        chargerId: widget.chargerId,
+        connectorId: widget.connectorId,
+        start: widget.startDateTime,
+        durationMinutes: widget.durationMinutes,
+      );
 
       if (!mounted) return;
 
+      final navigator = Navigator.of(context);
+      final messenger = ScaffoldMessenger.of(context);
+
       // Navigate back to the map screen
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      navigator.popUntil((route) => route.isFirst);
 
       // Show prominent acceptance feedback
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Row(
             children: [
@@ -213,15 +125,14 @@ class _PaymentPageState extends State<PaymentPage> {
             label: 'View Pass',
             textColor: Colors.white,
             onPressed: () {
-              Navigator.push(
-                context,
+              navigator.push(
                 MaterialPageRoute(
                   builder: (_) => ReservationConfirmedPage(
                     stationName: widget.stationName,
                     connectorInfo: widget.connectorName,
                     timeSlot: widget.timeSlot,
                     heldFor: 'Confirmed',
-                    reservationId: reservationId,
+                    reservationId: reservation.id,
                     amount: widget.total,
                   ),
                 ),
@@ -230,15 +141,14 @@ class _PaymentPageState extends State<PaymentPage> {
           ),
         ),
       );
-    } catch (error) {
+    } on ReservationException catch (e) {
       if (!mounted) return;
 
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      // Stay on the payment page: the reservation was NOT created.
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Reservation accepted! Spot reserved.'),
-          backgroundColor: primaryGreen,
-          duration: Duration(seconds: 4),
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: Colors.red,
           behavior: SnackBarBehavior.floating,
         ),
       );

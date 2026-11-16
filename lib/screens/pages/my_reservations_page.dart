@@ -1,14 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:chargi/features/reservations/data/reservation_repository.dart';
+import 'package:chargi/features/reservations/domain/reservation_list_rules.dart';
 import 'reservation_confirmed_page.dart';
 
 class MyReservationsPage extends StatefulWidget {
   final VoidCallback? onNavigateToMap;
 
+  /// Injectable for tests; default: the real server-side booking functions.
+  final ReservationRepository? reservationRepository;
+
+  /// Injectable for tests; default: the signed-in user's reservations.
+  final Stream<List<Map<String, dynamic>>>? reservationsStream;
+
   const MyReservationsPage({
     super.key,
     this.onNavigateToMap,
+    this.reservationRepository,
+    this.reservationsStream,
   });
 
   @override
@@ -24,6 +34,61 @@ class _MyReservationsPageState extends State<MyReservationsPage> {
   static const Color textMuted = Color(0xFF7A8B86);
 
   int _selectedTab = 0; // 0: All, 1: Active, 2: Completed
+
+  late final ReservationRepository _reservations =
+      widget.reservationRepository ?? ReservationRepository();
+
+  /// Reservations whose cancellation is in progress (disables their button).
+  final Set<String> _cancelling = {};
+
+  /// Asks for confirmation, then cancels through the server (which re-checks
+  /// ownership and that the reservation has not started).
+  Future<void> _confirmAndCancel(Map<String, dynamic> res) async {
+    final id = res['id']?.toString();
+    if (id == null || _cancelling.contains(id)) return;
+
+    final station = res['stationName']?.toString() ?? 'this charging station';
+    final when = _formatDateTime(res['startDateTime'], res['durationMinutes']);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel this reservation?'),
+        content: Text('$station\n$when\n\nThis cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep it'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+            child: const Text('Cancel reservation'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _cancelling.add(id));
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _reservations.cancelReservation(id);
+      // The list updates by itself: it listens to the user's reservations.
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Reservation cancelled.'),
+          backgroundColor: primaryGreen,
+        ),
+      );
+    } on ReservationException catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(e.message), backgroundColor: Colors.red.shade700),
+      );
+    } finally {
+      if (mounted) setState(() => _cancelling.remove(id));
+    }
+  }
 
   String _formatDateTime(dynamic startVal, int? durationMin) {
     if (startVal is Timestamp) {
@@ -87,11 +152,10 @@ Scan at charger to authenticate''';
     final user = FirebaseAuth.instance.currentUser;
     final firestore = FirebaseFirestore.instance;
 
+    // Reservations are private: without a signed-in user there is nothing to
+    // show (the security rules no longer allow listing the whole collection).
     if (user == null) {
-      return firestore
-          .collection('reservations')
-          .snapshots()
-          .map((snap) => snap.docs.map((d) => {'id': d.id, ...d.data()}).toList());
+      return Stream.value(const <Map<String, dynamic>>[]);
     }
 
     return firestore
@@ -177,7 +241,7 @@ Scan at charger to authenticate''';
             // Reservations List
             Expanded(
               child: StreamBuilder<List<Map<String, dynamic>>>(
-                stream: _getReservationsStream(),
+                stream: widget.reservationsStream ?? _getReservationsStream(),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(
@@ -201,22 +265,10 @@ Scan at charger to authenticate''';
                   final allReservations = snapshot.data ?? [];
                   final now = DateTime.now();
 
-                  final filteredReservations = allReservations.where((res) {
-                    if (_selectedTab == 0) return true;
-
-                    DateTime? startTime;
-                    if (res['startDateTime'] is Timestamp) {
-                      startTime = (res['startDateTime'] as Timestamp).toDate();
-                    }
-                    final durationMin = res['durationMinutes'] is num
-                        ? (res['durationMinutes'] as num).toInt()
-                        : 60;
-                    final endTime = startTime?.add(Duration(minutes: durationMin));
-                    final isPast = endTime?.isBefore(now) ?? false;
-
-                    if (_selectedTab == 1) return !isPast; // Active
-                    return isPast; // Completed
-                  }).toList();
+                  // Cancelled reservations show up under "All" only.
+                  final filteredReservations = allReservations
+                      .where((res) => reservationMatchesTab(res, _selectedTab, now))
+                      .toList();
 
                   if (filteredReservations.isEmpty) {
                     return _buildEmptyState();
@@ -280,6 +332,11 @@ Scan at charger to authenticate''';
         ? '${res['amount']} ${res['currency'] ?? 'TND'}'
         : 'Paid';
 
+    final cancelled = reservationIsCancelled(res);
+    final canCancel = reservationCanBeCancelled(res, DateTime.now());
+    final resId = res['id']?.toString();
+    final cancelling = resId != null && _cancelling.contains(resId);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
@@ -296,7 +353,8 @@ Scan at charger to authenticate''';
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        onTap: () => _openQrPass(res),
+        // A cancelled reservation has no valid pass to show.
+        onTap: cancelled ? null : () => _openQrPass(res),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -346,13 +404,17 @@ Scan at charger to authenticate''';
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFE4F3EE),
+                      color: cancelled
+                          ? const Color(0xFFFDECEA)
+                          : const Color(0xFFE4F3EE),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Text(
-                      'Confirmed',
+                    child: Text(
+                      cancelled ? 'Cancelled' : 'Confirmed',
                       style: TextStyle(
-                        color: primaryGreen,
+                        color: cancelled
+                            ? const Color(0xFF8A1C12)
+                            : primaryGreen,
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
                       ),
@@ -389,32 +451,68 @@ Scan at charger to authenticate''';
                 ],
               ),
 
-              const SizedBox(height: 14),
+              if (!cancelled) ...[
+                const SizedBox(height: 14),
 
-              // View QR Code button
-              SizedBox(
-                width: double.infinity,
-                height: 42,
-                child: ElevatedButton.icon(
-                  onPressed: () => _openQrPass(res),
-                  icon: const Icon(Icons.qr_code, size: 18),
-                  label: const Text(
-                    'View QR Pass',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
+                // View QR Code button
+                SizedBox(
+                  width: double.infinity,
+                  height: 42,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _openQrPass(res),
+                    icon: const Icon(Icons.qr_code, size: 18),
+                    label: const Text(
+                      'View QR Pass',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryGreen,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primaryGreen,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),
-              ),
+              ],
+
+              // Cancel button: only for a confirmed reservation that has not
+              // started yet.
+              if (canCancel) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  height: 42,
+                  child: OutlinedButton.icon(
+                    onPressed: cancelling ? null : () => _confirmAndCancel(res),
+                    icon: cancelling
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cancel_outlined, size: 18),
+                    label: Text(
+                      cancelling ? 'Cancelling...' : 'Cancel reservation',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red.shade700,
+                      side: BorderSide(color: Colors.red.shade300),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

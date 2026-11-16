@@ -73,6 +73,9 @@ class _SignUpPageState extends State<SignUpPage> {
             .set({
           'name': _nameCtrl.text.trim(),
           'email': _emailCtrl.text.trim(),
+          // Never chosen by the user: Firestore rules require "user" here and
+          // forbid changing it afterwards (admins promote from the console).
+          'role': 'user',
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));

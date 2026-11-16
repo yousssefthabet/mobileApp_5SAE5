@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:chargi/features/users/domain/user_role.dart';
+import 'package:chargi/features/users/presentation/role_badge.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
 import 'package:chargi/screens/auth/login_screen.dart';
 
@@ -18,6 +20,9 @@ class ProfilePage extends StatefulWidget {
   final VoidCallback? onSwitchToWorkerMode;
   final bool showBottomNavBar;
 
+  /// Role of the signed-in user, shown as a badge under the e-mail.
+  final UserRole role;
+
   const ProfilePage({
     super.key,
     this.onNavigateToMap,
@@ -25,6 +30,7 @@ class ProfilePage extends StatefulWidget {
     this.onNavigateToMyReports,
     this.onSwitchToWorkerMode,
     this.showBottomNavBar = true,
+    this.role = UserRole.user,
   });
 
   @override
@@ -188,6 +194,8 @@ class _ProfilePageState extends State<ProfilePage> {
                             color: Color(0xFF7A8B86),
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        RoleBadge(role: widget.role),
                       ],
                     ),
                   ),

@@ -63,6 +63,12 @@ class CustomBottomNavigationBar extends StatelessWidget {
               icon: Icons.person_outline,
               activeIcon: Icons.person,
             ),
+            // Appended last so the existing tab indices (0-3) are unchanged.
+            _NavItem(
+              label: 'Assistant',
+              icon: Icons.smart_toy_outlined,
+              activeIcon: Icons.smart_toy,
+            ),
           ];
 
     return Container(

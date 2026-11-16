@@ -1,5 +1,8 @@
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:chargi/firebase_options.dart';
@@ -13,7 +16,34 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  _connectToEmulatorsIfRequested();
+
   runApp(const MyApp());
+}
+
+/// Local testing without deploying anything:
+///
+///   flutter run --dart-define=USE_EMULATOR=true
+///
+/// Cloud Functions and Firestore then use the Firebase emulators (see
+/// docs/FEATURES.md). Sign-in still uses the real Firebase project. On a
+/// physical phone, also pass --dart-define=EMULATOR_HOST=YOUR_PC_IP.
+/// Never active unless the flag is set, and ignored in release builds.
+const bool _useEmulator = bool.fromEnvironment('USE_EMULATOR');
+const String _emulatorHost = String.fromEnvironment('EMULATOR_HOST');
+
+void _connectToEmulatorsIfRequested() {
+  if (!_useEmulator || !kDebugMode) return;
+
+  final host = _emulatorHost.isNotEmpty
+      ? _emulatorHost
+      : (!kIsWeb && defaultTargetPlatform == TargetPlatform.android
+          ? '10.0.2.2' // the Android emulator's alias for the PC
+          : 'localhost');
+
+  FirebaseFunctions.instance.useFunctionsEmulator(host, 5001);
+  FirebaseFirestore.instance.useFirestoreEmulator(host, 8185);
+  debugPrint('Using Firebase emulators at $host (functions 5001, firestore 8185)');
 }
 
 class MyApp extends StatelessWidget {

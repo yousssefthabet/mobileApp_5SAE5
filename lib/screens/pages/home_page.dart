@@ -613,7 +613,7 @@ class _HomePageState extends State<HomePage> {
               width: 64,
               height: 64,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) =>
+              errorBuilder: (_, _, _) =>
                   const Icon(Icons.ev_station, size: 45),
             )
           : const Icon(Icons.ev_station, size: 45, color: primaryGreen),

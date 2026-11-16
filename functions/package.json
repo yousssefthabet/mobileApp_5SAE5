@@ -1,0 +1,33 @@
+{
+  "name": "chargi-functions",
+  "private": true,
+  "main": "lib/src/index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test lib/test/domain.test.js lib/test/chatbot.nlu.test.js",
+    "test:emulator": "tsc && node --test lib/test/reservations.emulator.test.js",
+    "test:rules": "tsc && node --test lib/test/rules.emulator.test.js",
+    "test:all": "tsc && node --test lib/test/domain.test.js lib/test/chatbot.nlu.test.js lib/test/reservations.emulator.test.js lib/test/chatbot.dialog.emulator.test.js lib/test/rules.emulator.test.js",
+    "serve": "npm run build && firebase emulators:start --only functions,firestore",
+    "deploy": "firebase deploy --only functions",
+    "test:chat": "tsc && node --test lib/test/chatbot.dialog.emulator.test.js",
+    "emulators": "npm run build && firebase emulators:start --only functions,firestore --project chargi-b044b --config ../firebase.json",
+    "seed": "node scripts/seed-emulator.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.4.0",
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "@types/node": "^20.0.0",
+    "firebase": "^12.19.0",
+    "firebase-tools": "^15.34.2",
+    "typescript": "^5.6.0"
+  }
+}

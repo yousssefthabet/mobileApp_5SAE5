@@ -12,42 +12,78 @@ service cloud.firestore {
     }
 
     // User profile document and subcollections
+    //
+    // `role` ("user" | "worker" | "admin") is NEVER chosen by the user:
+    //  - on creation it must be "user";
+    //  - on update the owner cannot add, change or remove it;
+    //  - a document that has no role (older accounts) is treated as "user".
+    // Only admins promote someone, from the Firebase console / Admin SDK
+    // (which are not subject to these rules).
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && request.resource.data.role == 'user';
+
+      allow update: if isOwner(userId)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']);
+
+      // Profiles are never deleted from the client, so a worker cannot erase
+      // and recreate their document.
+      allow delete: if false;
 
       // Private reports subcollection
       match /reports/{reportId} {
         allow read, write: if isOwner(userId);
       }
 
-      // Private reservations subcollection
+      // Read-only mirror of the user's reservations.
+      // Written only by Cloud Functions (Admin SDK bypasses these rules).
       match /reservations/{reservationId} {
-        allow read, write: if isOwner(userId);
+        allow read: if isOwner(userId);
+        allow write: if false;
       }
     }
 
-    // EV Chargers: public read for map; update allowed for connector status
+    // EV Chargers and kiosks: public read for the map.
+    // Writes are server-side only (console / Admin SDK).
     match /ev_chargers/{chargerId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if false;
     }
 
-    // Kiosks: public read for map
     match /kiosk/{kioskId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if false;
     }
 
-    // Top-level reservations collection
+    // Reservations: created, cancelled and rescheduled ONLY by Cloud
+    // Functions, which check availability inside a transaction.
+    // A user can read only their own reservations.
     match /reservations/{reservationId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow write: if false;
     }
 
-    // Top-level reports collection
+    // Per-connector lock documents used by the booking transaction.
+    match /connector_locks/{lockId} {
+      allow read, write: if false;
+    }
+
+    // Notifications created by Cloud Functions; the owner may read them and
+    // mark them as read (only the `read` field can change).
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create, delete: if false;
+      allow update: if isAuthenticated()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+    }
+
+    // Top-level reports are not used by the app (reports live under
+    // users/{uid}/reports). Closed until a worker role exists.
     match /reports/{reportId} {
-      allow read: if true;
-      allow write: if true;
+      allow read, write: if false;
     }
 
     // Default deny for any unmatched document or collection
