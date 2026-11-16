@@ -192,3 +192,23 @@ test("roles: an admin promotes someone from the console (Admin SDK path), and th
   const lena = env.authenticatedContext("lena").firestore();
   assert.equal((await getDoc(doc(lena, "users/lena"))).get("role"), "worker");
 });
+
+// ---- Rewards (added on main by the team, kept after the merge) --------------
+
+test("rewards: own reward history and promo codes are private; points are editable but never together with the role", async () => {
+  await seedUser("zoe", { name: "Z", role: "user", rewardPoints: 0 });
+  const zoe = env.authenticatedContext("zoe").firestore();
+  const other = env.authenticatedContext("other").firestore();
+
+  await assertSucceeds(setDoc(doc(zoe, "users/zoe/reward_history/h1"), { points: 10 }));
+  await assertSucceeds(getDoc(doc(zoe, "users/zoe/reward_history/h1")));
+  await assertFails(getDoc(doc(other, "users/zoe/reward_history/h1")));
+  await assertFails(setDoc(doc(other, "users/zoe/reward_history/h2"), { points: 999 }));
+  await assertSucceeds(setDoc(doc(zoe, "users/zoe/promo_codes/p1"), { code: "PROMO30" }));
+  await assertFails(getDoc(doc(other, "users/zoe/promo_codes/p1")));
+
+  // the app writes rewardPoints through set+merge: allowed, role untouched
+  await assertSucceeds(setDoc(doc(zoe, "users/zoe"), { rewardPoints: 20 }, { merge: true }));
+  // ...but a role can never ride along with it
+  await assertFails(setDoc(doc(zoe, "users/zoe"), { rewardPoints: 20, role: "admin" }, { merge: true }));
+});

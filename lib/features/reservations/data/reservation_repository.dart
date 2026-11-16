@@ -52,12 +52,19 @@ class ReservationRepository {
     required int connectorId,
     required DateTime start,
     required int durationMinutes,
+
+    /// Optional loyalty code (PROMO30). The SERVER checks it against the
+    /// user's real points and applies the discount; the app never sends an
+    /// amount or a discount.
+    String? promoCode,
   }) async {
     final data = await _call('createReservation', {
       'chargerId': chargerId,
       'connectorId': connectorId,
       'start': start.toUtc().toIso8601String(),
       'durationMinutes': durationMinutes,
+      if (promoCode != null && promoCode.trim().isNotEmpty)
+        'promoCode': promoCode.trim(),
     });
     return ReservationModel.fromMap(data);
   }

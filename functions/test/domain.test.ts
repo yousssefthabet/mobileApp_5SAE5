@@ -106,3 +106,32 @@ test("normalizeReservation: derives duration from end, tolerates a missing conne
   assert.equal(normalizeReservation({ start: "2026-01-01", durationMinutes: 60 }), null); // not a timestamp
   assert.equal(normalizeReservation({ start: ts(0), durationMinutes: 60 })?.status, "unknown");
 });
+
+import { applyDiscount, calculateRewardPoints } from "../src/domain";
+
+const rr = (extra: Record<string, unknown>, createdMs: number) => ({ createdAt: ts(createdMs), ...extra });
+
+test("calculateRewardPoints: 10 per reservation, cancelled give nothing, promo resets to 0", () => {
+  assert.equal(calculateRewardPoints([]), 0);
+  assert.equal(calculateRewardPoints([rr({}, 1), rr({}, 2), rr({}, 3)]), 30);
+  assert.equal(calculateRewardPoints([rr({}, 1), rr({ reservationStatus: "cancelled" }, 2)]), 10);
+  assert.equal(calculateRewardPoints([rr({ status: "cancelled" }, 1)]), 0);
+  assert.equal(calculateRewardPoints([rr({ reservationStatus: "annulée" }, 1)]), 0);
+  // promo used: the counter resets, later reservations count again from 0
+  assert.equal(calculateRewardPoints([rr({}, 1), rr({}, 2), rr({ promoCode: "PROMO30", rewardPointsEarned: 0 }, 3), rr({}, 4)]), 10);
+  assert.equal(calculateRewardPoints([rr({}, 1), rr({ discountAmount: 5 }, 2)]), 0);
+});
+
+test("calculateRewardPoints: order is by creation time, custom points are honoured", () => {
+  // the promo (created second) wipes the first reservation, whatever the array order
+  assert.equal(calculateRewardPoints([rr({ promoCode: "PROMO30" }, 2), rr({}, 1), rr({}, 3)]), 10);
+  assert.equal(calculateRewardPoints([rr({ rewardPointsEarned: 25 }, 1), rr({}, 2)]), 35);
+  assert.equal(calculateRewardPoints([{ reservationStatus: "confirmed" }]), 10); // no createdAt
+});
+
+test("applyDiscount", () => {
+  assert.equal(applyDiscount(26, 30), 18.2);
+  assert.equal(applyDiscount(26, 0), 26);
+  assert.equal(applyDiscount(0, 30), 0);
+  assert.equal(applyDiscount(10, 33.3), 6.67);
+});

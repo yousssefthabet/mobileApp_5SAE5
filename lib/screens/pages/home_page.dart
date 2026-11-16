@@ -12,6 +12,7 @@ import 'charger_details_page.dart';
 import 'kiosk_detail_page.dart';
 import 'report_trash_page.dart';
 import 'notifications_page.dart';
+import 'package:chargi/services/station_availability_service.dart';
 
 class HomePage extends StatefulWidget {
   final VoidCallback? onNavigateToProfile;
@@ -74,6 +75,9 @@ class _HomePageState extends State<HomePage> {
     _listenToKiosks();
     _listenToReports();
 
+    // Release any expired charger reservations and start periodic check
+    StationAvailabilityService.instance.startPeriodicCleanup();
+
     if (widget.focusCoord != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _mapController.move(widget.focusCoord!, 16);
@@ -83,6 +87,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    StationAvailabilityService.instance.stopPeriodicCleanup();
     _mapController.dispose();
     super.dispose();
   }
@@ -205,7 +210,8 @@ class _HomePageState extends State<HomePage> {
     if (connectors is List) {
       return connectors.where((item) {
         if (item is! Map) return false;
-        return item['status']?.toString().toLowerCase() == 'free';
+        return StationAvailabilityService.instance
+            .isConnectorFree(Map<String, dynamic>.from(item));
       }).length;
     }
 

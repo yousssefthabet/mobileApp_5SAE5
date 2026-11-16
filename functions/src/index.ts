@@ -34,6 +34,7 @@ export const createReservation = onCall(async (request) => {
       connectorId: data["connectorId"],
       start: data["start"],
       durationMinutes: data["durationMinutes"],
+      promoCode: data["promoCode"],
     },
   );
 });

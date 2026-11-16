@@ -22,7 +22,7 @@ Map<String, dynamic> _res(
       'durationMinutes': 60,
       'amount': 26,
       'currency': 'TND',
-      'status': status,
+      'reservationStatus': status,
     };
 
 Map<String, Object?> _cancelledJson(String id) => {
@@ -59,7 +59,7 @@ void main() {
   });
 
   Future<void> open(WidgetTester tester, List<Map<String, dynamic>> items) async {
-    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.physicalSize = const Size(900, 2600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(MaterialApp(
@@ -71,56 +71,63 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  group('which reservations get a Cancel button', () {
-    testWidgets('only a confirmed one that has not started', (tester) async {
+  Future<void> confirmInDialog(WidgetTester tester) async {
+    await tester.tap(find.text('Annuler'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Annuler et libérer la borne'));
+    await tester.pumpAndSettle();
+  }
+
+  group('which reservations get an "Annuler" button', () {
+    testWidgets('only an active one that has not started', (tester) async {
       await open(tester, [
         _res('upcoming', station: 'Upcoming'),
         _res('past', start: const Duration(days: -2), station: 'Past'),
         _res('gone', status: 'cancelled', station: 'Gone'),
       ]);
 
-      expect(find.text('Cancel reservation'), findsOneWidget);
-      expect(find.text('Cancelled'), findsOneWidget); // badge of the cancelled one
-      // its pass is not offered; the other two still have one
-      expect(find.text('View QR Pass'), findsNWidgets(2));
+      expect(find.text('Annuler'), findsOneWidget); // only the upcoming one
+      expect(find.text('Annulée'), findsOneWidget); // badge of the cancelled one
+      expect(find.text('Expirée'), findsOneWidget);
     });
 
-    testWidgets('a cancelled reservation shows "Cancelled", not "Confirmed"', (tester) async {
+    testWidgets('a reservation that has already started cannot be cancelled', (tester) async {
+      await open(tester, [_res('now', start: const Duration(minutes: -10))]);
+      expect(find.text('Annuler'), findsNothing);
+    });
+
+    testWidgets('a cancelled reservation shows no cancel button', (tester) async {
       await open(tester, [_res('gone', status: 'cancelled')]);
-      expect(find.text('Cancelled'), findsOneWidget);
-      expect(find.text('Confirmed'), findsNothing);
-      expect(find.text('Cancel reservation'), findsNothing);
-      expect(find.text('View QR Pass'), findsNothing);
+      expect(find.text('Annulée'), findsOneWidget);
+      expect(find.text('Annuler'), findsNothing);
     });
   });
 
-  group('cancelling', () {
-    testWidgets('asks for confirmation first; "Keep it" calls nothing', (tester) async {
+  group('cancelling goes through the server', () {
+    testWidgets('asks for confirmation first; "Garder ma réservation" calls nothing', (tester) async {
       await open(tester, [_res('r1')]);
 
-      await tester.tap(find.text('Cancel reservation'));
+      await tester.tap(find.text('Annuler'));
       await tester.pumpAndSettle();
-      expect(find.text('Cancel this reservation?'), findsOneWidget);
-      expect(find.textContaining('Station One'), findsWidgets);
+      expect(find.text('Annuler la réservation ?'), findsOneWidget);
 
-      await tester.tap(find.text('Keep it'));
+      await tester.tap(find.text('Garder ma réservation'));
       await tester.pumpAndSettle();
 
       expect(calls, isEmpty);
-      expect(find.text('Reservation cancelled.'), findsNothing);
+      expect(find.textContaining('Réservation annulée'), findsNothing);
     });
 
     testWidgets('confirming calls the server for that reservation and says so', (tester) async {
       await open(tester, [_res('r1'), _res('r2', station: 'Other')]);
 
-      await tester.tap(find.text('Cancel reservation').first);
+      await tester.tap(find.text('Annuler').first);
       await tester.pumpAndSettle();
-      // the dialog's own confirm button has the same label as the card button
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel reservation'));
+      await tester.tap(find.text('Annuler et libérer la borne'));
       await tester.pumpAndSettle();
 
       expect(calls, ['cancelReservation:r1']);
-      expect(find.text('Reservation cancelled.'), findsOneWidget);
+      expect(find.textContaining('Réservation annulée'), findsOneWidget);
     });
 
     testWidgets('if the server refuses, the error is shown and no success is announced', (tester) async {
@@ -129,41 +136,31 @@ void main() {
             message: 'This reservation has already started.',
           );
       await open(tester, [_res('r1')]);
-
-      await tester.tap(find.text('Cancel reservation'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel reservation'));
-      await tester.pumpAndSettle();
+      await confirmInDialog(tester);
 
       expect(find.text('This reservation has already started.'), findsOneWidget);
-      expect(find.text('Reservation cancelled.'), findsNothing);
-      // and the button is back so the user can retry or leave
-      expect(find.text('Cancel reservation'), findsOneWidget);
+      expect(find.textContaining('Réservation annulée'), findsNothing);
+      expect(find.text('Annuler'), findsOneWidget); // the button is back
     });
 
-    testWidgets('no connection: friendly message, nothing claimed', (tester) async {
+    testWidgets('no connection: a friendly message, nothing claimed', (tester) async {
       onCancel = (id) => FirebaseFunctionsException(code: 'unavailable', message: 'x');
       await open(tester, [_res('r1')]);
-
-      await tester.tap(find.text('Cancel reservation'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel reservation'));
-      await tester.pumpAndSettle();
+      await confirmInDialog(tester);
 
       expect(find.textContaining('No connection'), findsOneWidget);
-      expect(find.text('Reservation cancelled.'), findsNothing);
+      expect(find.textContaining('Réservation annulée'), findsNothing);
     });
 
     testWidgets('while the request runs the button is disabled (no double cancel)', (tester) async {
       hold = Completer<void>();
       await open(tester, [_res('r1')]);
 
-      await tester.tap(find.text('Cancel reservation'));
+      await tester.tap(find.text('Annuler'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel reservation'));
+      await tester.tap(find.text('Annuler et libérer la borne'));
       await tester.pump();
 
-      expect(find.text('Cancelling...'), findsOneWidget);
       final button = tester.widget<OutlinedButton>(find.byType(OutlinedButton));
       expect(button.onPressed, isNull);
 
@@ -173,18 +170,14 @@ void main() {
     });
   });
 
-  testWidgets('tabs: a cancelled reservation is only in "All"', (tester) async {
+  testWidgets('tabs: a cancelled reservation is not under "Actives"', (tester) async {
     await open(tester, [_res('up', station: 'Upcoming'), _res('gone', status: 'cancelled', station: 'Gone')]);
 
-    expect(find.text('Gone'), findsOneWidget);
+    expect(find.text('Gone'), findsOneWidget); // "Toutes"
 
-    await tester.tap(find.text('Active'));
+    await tester.tap(find.text('Actives'));
     await tester.pumpAndSettle();
     expect(find.text('Upcoming'), findsOneWidget);
-    expect(find.text('Gone'), findsNothing);
-
-    await tester.tap(find.text('Completed'));
-    await tester.pumpAndSettle();
     expect(find.text('Gone'), findsNothing);
   });
 }

@@ -60,34 +60,4 @@ void main() {
       expect(reservationCanBeCancelled({'startDateTime': 'soon', 'status': 'confirmed'}, now), isFalse);
     });
   });
-
-  group('tabs', () {
-    final future = res();
-    final past = res(start: const Duration(days: -2));
-    final cancelledFuture = res(status: 'cancelled');
-    final cancelledPast = res(start: const Duration(days: -2), status: 'cancelled');
-
-    test('All shows everything', () {
-      for (final r in [future, past, cancelledFuture, cancelledPast]) {
-        expect(reservationMatchesTab(r, 0, now), isTrue);
-      }
-    });
-
-    test('Active = not ended and not cancelled', () {
-      expect(reservationMatchesTab(future, 1, now), isTrue);
-      expect(reservationMatchesTab(past, 1, now), isFalse);
-      expect(reservationMatchesTab(cancelledFuture, 1, now), isFalse);
-    });
-
-    test('Completed = ended and not cancelled', () {
-      expect(reservationMatchesTab(past, 2, now), isTrue);
-      expect(reservationMatchesTab(future, 2, now), isFalse);
-      expect(reservationMatchesTab(cancelledPast, 2, now), isFalse);
-    });
-
-    test('a reservation with an unreadable date is treated as not ended', () {
-      expect(reservationMatchesTab({'status': 'confirmed'}, 1, now), isTrue);
-      expect(reservationMatchesTab({'status': 'confirmed'}, 2, now), isFalse);
-    });
-  });
 }

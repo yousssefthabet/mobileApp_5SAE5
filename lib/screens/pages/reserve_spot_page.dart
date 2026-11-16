@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'payment_page.dart';
+import 'package:chargi/services/station_availability_service.dart';
 
 class ReserveSpotPage extends StatefulWidget {
   final String chargerId;
@@ -25,12 +26,16 @@ class _ReserveSpotPageState extends State<ReserveSpotPage> {
   static const Color backgroundColor = Color(0xFFF7F9F8);
 
   DateTime _selectedDate = DateTime.now();
-  TimeOfDay _selectedTime = TimeOfDay.fromDateTime(
-    DateTime.now().add(const Duration(minutes: 5)),
-  );
-  int _selectedDurationMinutes = 60;
+  TimeOfDay _selectedTime = TimeOfDay.now();
+  int _selectedDurationMinutes = 30;
   int? _selectedConnectorId;
   bool _isOpeningPayment = false;
+
+  @override
+  void initState() {
+    super.initState();
+    StationAvailabilityService.instance.checkAndReleaseCharger(widget.chargerId);
+  }
 
   double _number(dynamic value, {double fallback = 0}) {
     if (value is num) return value.toDouble();
@@ -242,7 +247,7 @@ class _ReserveSpotPageState extends State<ReserveSpotPage> {
               : <Map<String, dynamic>>[];
 
           final availableConnectors = allConnectors.where((connector) {
-            return connector['status']?.toString().toLowerCase() == 'free';
+            return StationAvailabilityService.instance.isConnectorFree(connector);
           }).toList();
 
           Map<String, dynamic>? selectedConnector;

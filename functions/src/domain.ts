@@ -204,3 +204,60 @@ export function normalizeReservation(d: Record<string, unknown>): NormalizedRese
 
   return { startMs, endMs, durationMinutes, status, connectorKey };
 }
+
+// ---------------------------------------------------------------------------
+// Loyalty points and the PROMO30 code (same rules as lib/services/reward_service.dart)
+// ---------------------------------------------------------------------------
+
+export const POINTS_PER_RESERVATION = 10;
+export const PROMO_THRESHOLD_POINTS = 100;
+export const PROMO_DISCOUNT_PERCENT = 30;
+export const PROMO_CODE = "PROMO30";
+
+/**
+ * Current points of a user, derived ONLY from their reservations (which only
+ * the server can write), so the balance cannot be forged from the app:
+ *  - cancelled reservations give nothing;
+ *  - a reservation that used the promo resets the counter to 0 (single use);
+ *  - every other reservation gives `rewardPointsEarned` (default 10).
+ * Reservations are processed in creation order.
+ */
+export function calculateRewardPoints(reservations: Record<string, unknown>[]): number {
+  const createdOf = (r: Record<string, unknown>): number | null =>
+    isMillis(r["createdAt"]) ? r["createdAt"].toMillis() : null;
+
+  const sorted = [...reservations].sort((a, b) => {
+    const ta = createdOf(a);
+    const tb = createdOf(b);
+    if (ta === null && tb === null) return 0;
+    if (ta === null) return -1;
+    if (tb === null) return 1;
+    return ta - tb;
+  });
+
+  let points = 0;
+  for (const r of sorted) {
+    const raw = r["reservationStatus"] ?? r["status"];
+    const status = typeof raw === "string" ? raw.toLowerCase() : "";
+    if (status === "cancelled" || status === "annulée") continue;
+
+    const discount = r["discountAmount"];
+    const promo = r["promoCode"];
+    const usedPromo =
+      (typeof discount === "number" && discount > 0) ||
+      (promo !== null && promo !== undefined && String(promo).trim() !== "");
+
+    if (usedPromo) {
+      points = 0;
+    } else {
+      const earned = r["rewardPointsEarned"];
+      points += typeof earned === "number" ? Math.trunc(earned) : POINTS_PER_RESERVATION;
+    }
+  }
+  return Math.max(points, 0);
+}
+
+/** Price after a percentage discount, rounded to 2 decimals. */
+export function applyDiscount(total: number, percent: number): number {
+  return Math.round(total * (1 - percent / 100) * 100) / 100;
+}

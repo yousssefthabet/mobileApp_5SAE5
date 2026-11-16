@@ -2,8 +2,14 @@ import { Firestore, Timestamp, FieldValue, Transaction } from "firebase-admin/fi
 import { HttpsError } from "firebase-functions/v2/https";
 
 import {
+  applyDiscount,
+  calculateRewardPoints,
   checkModifiable,
   computePrice,
+  POINTS_PER_RESERVATION,
+  PROMO_CODE,
+  PROMO_DISCOUNT_PERCENT,
+  PROMO_THRESHOLD_POINTS,
   effectiveConnectorId,
   haversineKm,
   normalizeReservation,
@@ -168,6 +174,8 @@ export interface CreateInput {
   connectorId: unknown;
   start: unknown;
   durationMinutes: unknown;
+  /** Optional loyalty promo code (PROMO30), validated here against the user's real points. */
+  promoCode?: unknown;
 }
 
 export async function createReservationCore(
@@ -209,6 +217,28 @@ export async function createReservationCore(
     }
 
     const price = computePrice(charger, resolved.connector, minutes);
+
+    // Promo: the code and the user's points are checked HERE, from the user's
+    // own reservations (server-written), never from what the app claims.
+    let discountPercent = 0;
+    const promo = typeof input.promoCode === "string" ? input.promoCode.trim().toUpperCase() : "";
+    if (promo !== "") {
+      if (promo !== PROMO_CODE) {
+        throw new HttpsError("failed-precondition", "This promo code is not valid.", { code: "promo_invalid" });
+      }
+      const mine = await tx.get(db.collection("users").doc(userId).collection("reservations"));
+      const points = calculateRewardPoints(mine.docs.map((doc) => doc.data()));
+      if (points < PROMO_THRESHOLD_POINTS) {
+        throw new HttpsError(
+          "failed-precondition",
+          `Promo code not unlocked yet: ${points} / ${PROMO_THRESHOLD_POINTS} points.`,
+          { code: "promo_locked" },
+        );
+      }
+      discountPercent = PROMO_DISCOUNT_PERCENT;
+    }
+    const finalAmount = applyDiscount(price.total, discountPercent);
+
     const stationName = String(charger["name"] ?? charger["stationName"] ?? "Charging station");
     const connectorName = connectorLabel(resolved.connector, resolved.key);
     const connectorId = Number(resolved.key);
@@ -225,7 +255,13 @@ export async function createReservationCore(
       start: Timestamp.fromMillis(startMs),
       end: Timestamp.fromMillis(endMs),
       durationMinutes: minutes,
-      amount: price.total,
+      amount: finalAmount,
+      originalAmount: price.total,
+      discountPercent,
+      discountAmount: Math.round((price.total - finalAmount) * 100) / 100,
+      promoCode: discountPercent > 0 ? PROMO_CODE : null,
+      // Same fields the loyalty screens read: a promo booking earns no points.
+      rewardPointsEarned: discountPercent > 0 ? 0 : POINTS_PER_RESERVATION,
       currency: "TND",
       status: "confirmed",
       // Legacy fields still read by existing screens.
@@ -387,12 +423,18 @@ export async function rescheduleReservationCore(
     }
 
     const price = computePrice(charger, resolved.connector, minutes);
+    // A reservation that was booked with the promo keeps its discount.
+    const keptDiscount = numberOf(d["discountPercent"], 0);
+    const newAmount = applyDiscount(price.total, keptDiscount);
     const patch = {
       start: Timestamp.fromMillis(newStartMs),
       end: Timestamp.fromMillis(newEndMs),
       startDateTime: Timestamp.fromMillis(newStartMs),
       durationMinutes: minutes,
-      amount: price.total,
+      amount: newAmount,
+      ...(keptDiscount > 0
+        ? { originalAmount: price.total, discountAmount: Math.round((price.total - newAmount) * 100) / 100 }
+        : {}),
       // Also upgrades a legacy document to the current format, so from now on
       // it takes part in overlap checks.
       status: n.status,

@@ -1,8 +1,9 @@
-
+import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:chargi/services/reward_service.dart';
 import 'package:chargi/features/reservations/data/reservation_repository.dart';
-
 import 'reservation_confirmed_page.dart';
 
 class PaymentPage extends StatefulWidget {
@@ -41,14 +42,102 @@ class PaymentPage extends StatefulWidget {
 class _PaymentPageState extends State<PaymentPage> {
   static const Color primaryGreen = Color(0xFF086B5B);
   static const Color backgroundColor = Color(0xFFF7F9F8);
+  static const Color goldAccent = Color(0xFFD97706);
 
   bool _isProcessing = false;
 
+  // Reward and Promo Code state
   final ReservationRepository _reservations = ReservationRepository();
+  final TextEditingController _promoController = TextEditingController();
+  StreamSubscription<int>? _pointsSub;
+  int _userPoints = 0;
+  bool _isPromoApplied = false;
+  String _appliedPromoCode = '';
+  double _discountPercent = 0.0;
+  double _discountAmount = 0.0;
+  String? _promoError;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenToUserPoints();
+  }
+
+  @override
+  void dispose() {
+    _promoController.dispose();
+    _pointsSub?.cancel();
+    super.dispose();
+  }
+
+  void _listenToUserPoints() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      _pointsSub = RewardService.instance
+          .getUserPointsStream(user.uid)
+          .listen((pts) {
+        if (mounted) {
+          setState(() {
+            _userPoints = pts;
+          });
+        }
+      });
+    }
+  }
+
+  double get _finalTotal {
+    if (_isPromoApplied) {
+      final discounted = widget.amount - _discountAmount;
+      return discounted < 0 ? 0.0 : discounted;
+    }
+    return widget.amount;
+  }
+
+  String get _finalTotalString => '${_finalTotal.toStringAsFixed(2)} TND';
+  String get _discountAmountString => '-${_discountAmount.toStringAsFixed(2)} TND';
+
+  void _applyPromoCode({String? directCode}) {
+    FocusScope.of(context).unfocus();
+    final code = directCode ?? _promoController.text.trim();
+
+    final validation = RewardService.instance.validatePromoCode(
+      code: code,
+      currentPoints: _userPoints,
+    );
+
+    setState(() {
+      if (validation.isValid) {
+        _isPromoApplied = true;
+        _appliedPromoCode = validation.code;
+        _discountPercent = validation.discountPercent;
+        _discountAmount = widget.amount * (_discountPercent / 100.0);
+        _promoError = null;
+        _promoController.text = validation.code;
+      } else {
+        _isPromoApplied = false;
+        _appliedPromoCode = '';
+        _discountPercent = 0.0;
+        _discountAmount = 0.0;
+        _promoError = validation.errorMessage;
+      }
+    });
+  }
+
+  void _removePromoCode() {
+    setState(() {
+      _isPromoApplied = false;
+      _appliedPromoCode = '';
+      _discountPercent = 0.0;
+      _discountAmount = 0.0;
+      _promoError = null;
+      _promoController.clear();
+    });
+  }
 
   Future<void> _confirmDemoPayment() async {
     if (_isProcessing) return;
 
+    final user = FirebaseAuth.instance.currentUser;
     final now = DateTime.now();
 
     // Allow immediate reservation within a 15-minute tolerance
@@ -65,14 +154,43 @@ class _PaymentPageState extends State<PaymentPage> {
     setState(() => _isProcessing = true);
 
     try {
-      // The server checks availability, prices the booking and writes it
-      // inside a transaction. Nothing is confirmed until this call succeeds.
+      // The SERVER books the slot: it checks availability inside a
+      // transaction, computes the price, and validates the promo code against
+      // the user's real points. Nothing is confirmed until this call succeeds.
       final reservation = await _reservations.createReservation(
         chargerId: widget.chargerId,
         connectorId: widget.connectorId,
         start: widget.startDateTime,
         durationMinutes: widget.durationMinutes,
+        promoCode: _isPromoApplied ? _appliedPromoCode : null,
       );
+      final reservationId = reservation.id;
+
+      // The server confirmed the promo only if the amount really went down.
+      final bool usedPromo = _isPromoApplied && reservation.amount < widget.amount;
+      final double saved = widget.amount - reservation.amount;
+
+      // Reward bookkeeping (history + counters), after the booking succeeded.
+      if (user != null) {
+        try {
+          if (usedPromo) {
+            await RewardService.instance.redeemPromoPoints(
+              userId: user.uid,
+              reservationId: reservationId,
+              discountAmount: saved,
+              promoCode: _appliedPromoCode,
+            );
+          } else {
+            await RewardService.instance.awardPointsForReservation(
+              userId: user.uid,
+              reservationId: reservationId,
+              stationName: widget.stationName,
+            );
+          }
+        } catch (e) {
+          debugPrint('Could not award reward points: $e');
+        }
+      }
 
       if (!mounted) return;
 
@@ -82,7 +200,10 @@ class _PaymentPageState extends State<PaymentPage> {
       // Navigate back to the map screen
       navigator.popUntil((route) => route.isFirst);
 
-      // Show prominent acceptance feedback
+      // Show prominent acceptance feedback with reward notification
+      final String passAmount = '${reservation.amount.toStringAsFixed(2)} TND';
+      final String savedAmount = '-${saved.toStringAsFixed(2)} TND';
+
       messenger.showSnackBar(
         SnackBar(
           content: Row(
@@ -94,9 +215,11 @@ class _PaymentPageState extends State<PaymentPage> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Reservation accepted',
-                      style: TextStyle(
+                    Text(
+                      usedPromo
+                          ? 'Réservation acceptée · 30% économisés !'
+                          : 'Reservation accepted',
+                      style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 15,
                         color: Colors.white,
@@ -104,7 +227,9 @@ class _PaymentPageState extends State<PaymentPage> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Spot reserved at ${widget.stationName}',
+                      usedPromo
+                          ? '🎉 Code promo 30% utilisé · Compteur remis à 0 pt'
+                          : '🎉 +10 Points fidélité gagnés à ${widget.stationName}',
                       style: const TextStyle(
                         fontSize: 13,
                         color: Colors.white70,
@@ -132,8 +257,15 @@ class _PaymentPageState extends State<PaymentPage> {
                     connectorInfo: widget.connectorName,
                     timeSlot: widget.timeSlot,
                     heldFor: 'Confirmed',
-                    reservationId: reservation.id,
-                    amount: widget.total,
+                    reservationId: reservationId,
+                    amount: passAmount,
+                    pointsEarned: usedPromo ? 0 : RewardService.pointsPerReservation,
+                    discountApplied: usedPromo,
+                    discountAmount: usedPromo ? savedAmount : null,
+                    chargerId: widget.chargerId,
+                    connectorId: widget.connectorId,
+                    endDateTime: widget.startDateTime.add(Duration(minutes: widget.durationMinutes)),
+                    durationMinutes: widget.durationMinutes,
                   ),
                 ),
               );
@@ -161,6 +293,8 @@ class _PaymentPageState extends State<PaymentPage> {
 
   @override
   Widget build(BuildContext context) {
+    final hasEnoughPointsForPromo = _userPoints >= RewardService.promoThresholdPoints;
+
     return Scaffold(
       backgroundColor: backgroundColor,
       appBar: AppBar(
@@ -266,6 +400,292 @@ class _PaymentPageState extends State<PaymentPage> {
                     'Duration',
                     '${widget.durationMinutes} minutes',
                   ),
+                  const SizedBox(height: 12),
+                  _detailRow(
+                    'Gain fidélité',
+                    '+${RewardService.pointsPerReservation} points',
+                    highlightColor: primaryGreen,
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 24),
+
+            // Promo Code & Rewards Section
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Code promo & Fidélité',
+                  style: TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE2EFEA),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.stars_rounded,
+                        color: goldAccent,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '$_userPoints pts',
+                        style: const TextStyle(
+                          color: primaryGreen,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: _isPromoApplied
+                      ? primaryGreen
+                      : (hasEnoughPointsForPromo ? Colors.amber.shade400 : Colors.grey.shade200),
+                  width: _isPromoApplied || hasEnoughPointsForPromo ? 1.5 : 1.0,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // One-tap unlock banner if user has 100+ points and hasn't applied promo
+                  if (hasEnoughPointsForPromo && !_isPromoApplied) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFAF5E9),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.amber.shade300),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.card_giftcard,
+                            color: goldAccent,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '30% de réduction disponible !',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    color: Color(0xFF854D0E),
+                                  ),
+                                ),
+                                Text(
+                                  'Vous avez 100+ points. Utilisez le code PROMO30.',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF78350F),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          ElevatedButton(
+                            onPressed: () => _applyPromoCode(
+                              directCode: RewardService.promoCodeName,
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: goldAccent,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            child: const Text(
+                              'Appliquer',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+
+                  if (_isPromoApplied) ...[
+                    // Success badge
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE2EFEA),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFBCE3D6)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.check_circle,
+                            color: primaryGreen,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Code $_appliedPromoCode appliqué (-30%)',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    color: primaryGreen,
+                                  ),
+                                ),
+                                Text(
+                                  'Économie de ${_discountAmount.toStringAsFixed(2)} TND (100 points échangés)',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF436056),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: _removePromoCode,
+                            icon: const Icon(
+                              Icons.close,
+                              color: Colors.redAccent,
+                              size: 20,
+                            ),
+                            tooltip: 'Retirer le code',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _promoController,
+                            textCapitalization: TextCapitalization.characters,
+                            decoration: InputDecoration(
+                              hintText: 'Saisir code (ex: PROMO30)',
+                              hintStyle: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade400,
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 12,
+                              ),
+                              filled: true,
+                              fillColor: backgroundColor,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(
+                                  color: primaryGreen,
+                                  width: 1.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        ElevatedButton(
+                          onPressed: () => _applyPromoCode(),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: primaryGreen,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: const Text(
+                            'Appliquer',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_promoError != null) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            size: 16,
+                            color: Colors.redAccent,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              _promoError!,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.redAccent,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    if (!hasEnoughPointsForPromo) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        '💡 Le code PROMO30 (30% de réduction) nécessite 100 points fidélité (vous en avez $_userPoints).',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ],
                 ],
               ),
             ),
@@ -351,8 +771,16 @@ class _PaymentPageState extends State<PaymentPage> {
                   _priceRow('Charging estimate', widget.subtotal),
                   const SizedBox(height: 12),
                   _priceRow('Reservation fee', widget.fees),
+                  if (_isPromoApplied) ...[
+                    const SizedBox(height: 12),
+                    _priceRow(
+                      'Réduction Code Promo (30%)',
+                      _discountAmountString,
+                      isDiscount: true,
+                    ),
+                  ],
                   const Divider(height: 28),
-                  _priceRow('Total', widget.total, bold: true),
+                  _priceRow('Total', _finalTotalString, bold: true),
                 ],
               ),
             ),
@@ -381,7 +809,7 @@ class _PaymentPageState extends State<PaymentPage> {
                         ),
                       )
                     : Text(
-                        'Confirm reservation · ${widget.total}',
+                        'Confirm reservation · $_finalTotalString',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
@@ -407,7 +835,7 @@ class _PaymentPageState extends State<PaymentPage> {
     );
   }
 
-  Widget _detailRow(String label, String value) {
+  Widget _detailRow(String label, String value, {Color? highlightColor}) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -422,7 +850,10 @@ class _PaymentPageState extends State<PaymentPage> {
           child: Text(
             value,
             textAlign: TextAlign.end,
-            style: const TextStyle(fontWeight: FontWeight.w600),
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: highlightColor ?? Colors.black87,
+            ),
           ),
         ),
       ],
@@ -433,6 +864,7 @@ class _PaymentPageState extends State<PaymentPage> {
     String label,
     String value, {
     bool bold = false,
+    bool isDiscount = false,
   }) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -443,6 +875,7 @@ class _PaymentPageState extends State<PaymentPage> {
             style: TextStyle(
               fontWeight: bold ? FontWeight.bold : FontWeight.normal,
               fontSize: bold ? 16 : 14,
+              color: isDiscount ? primaryGreen : Colors.black87,
             ),
           ),
         ),
@@ -450,8 +883,10 @@ class _PaymentPageState extends State<PaymentPage> {
         Text(
           value,
           style: TextStyle(
-            color: bold ? primaryGreen : Colors.black87,
-            fontWeight: bold ? FontWeight.bold : FontWeight.w600,
+            color: isDiscount
+                ? primaryGreen
+                : (bold ? primaryGreen : Colors.black87),
+            fontWeight: bold || isDiscount ? FontWeight.bold : FontWeight.w600,
             fontSize: bold ? 17 : 14,
           ),
         ),

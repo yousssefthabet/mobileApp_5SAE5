@@ -193,3 +193,21 @@ Not done: App Check is not enforced (it needs setup in the app), and the default
 - **Nobody can assign a role from the app.** The security rules reject any change to `role` coming from a user, including an admin using the app. Roles are assigned **by hand, in the Firebase console, by a project member with edit access** (Firestore Database -> `users` -> the user's document -> field `role`).
 - Today that means the project owner and collaborators with an Editor role in the console. To keep control tight, only give console access to people who may promote others.
 - Later, if admins must promote people from inside the app, do it with a Cloud Function that first checks that the caller is an `admin` (never with a client-side write).
+
+## Merge with the team's rewards work (branch `oussema` + `main`)
+
+`main` added loyalty rewards (points, the PROMO30 code, `RewardService`, `StationAvailabilityService`, French "Mes Reservations" screen with their own cancel button). Their code wrote directly to Firestore from the app, which the new security rules forbid, so the two were integrated like this:
+
+| Area | Result |
+|---|---|
+| Booking (`payment_page.dart`) | Their screen (promo field, points, messages) is kept. The reservation itself is created by the **server** (`createReservation`). The app no longer writes `reservations` or marks connectors busy. |
+| PROMO30 | Validated **on the server**: it recomputes the user's points from their real reservations (same rule as `RewardService`: 10 points each, cancelled ones removed, a promo resets to 0) and applies -30% only if there are at least 100 points. The app never sends an amount or a discount. A promo reservation keeps its discount when rescheduled. |
+| Cancel (`my_reservations_page.dart`) | Their screen and "Annuler" button are kept; cancelling now calls the server (`cancelReservation`) and then updates their reward history. The button only appears for a reservation that has not started yet. |
+| Points | Unchanged: derived from the reservations, so they work with server-created reservations. |
+| `firestore.rules` | Both sides merged: their `reward_history` / `promo_codes` subcollections and our locked collections. |
+| `StationAvailabilityService` | Kept, but its writes to `ev_chargers` and `reservations` are now refused by the rules (errors are caught and logged). New bookings no longer set a connector to "busy"; availability is decided by the server per time slot. |
+
+Known consequences to discuss with the team:
+- Connectors marked `busy` by the **old** flow stay busy: the app can no longer clear them. A one-off admin cleanup (or a scheduled Cloud Function) is needed.
+- The UI no longer shows a connector as "occupied" for a new reservation; a taken slot is refused by the server with a clear message instead.
+- `rewardPoints` stored on `users/{uid}` is a client-writable cache (not trusted). Promo eligibility is always recomputed on the server.

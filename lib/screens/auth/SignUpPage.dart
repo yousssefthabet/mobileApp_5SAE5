@@ -76,6 +76,7 @@ class _SignUpPageState extends State<SignUpPage> {
           // Never chosen by the user: Firestore rules require "user" here and
           // forbid changing it afterwards (admins promote from the console).
           'role': 'user',
+          'rewardPoints': 0,
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));

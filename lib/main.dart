@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:chargi/firebase_options.dart';
 import 'package:chargi/screens/auth/login_screen.dart';
 import 'package:chargi/screens/pages/main_navigation_page.dart';
+import 'package:chargi/services/station_availability_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +18,9 @@ Future<void> main() async {
   );
 
   _connectToEmulatorsIfRequested();
+
+  // Automatically check and release expired reservations on app startup
+  StationAvailabilityService.instance.releaseExpiredReservations();
 
   runApp(const MyApp());
 }

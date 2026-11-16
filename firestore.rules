@@ -43,6 +43,16 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow write: if false;
       }
+
+      // Private reward history subcollection
+      match /reward_history/{historyId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Private promo codes subcollection
+      match /promo_codes/{codeId} {
+        allow read, write: if isOwner(userId);
+      }
     }
 
     // EV Chargers and kiosks: public read for the map.

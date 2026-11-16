@@ -223,3 +223,73 @@ test("legacy: unusable documents give a clear error, not an internal crash", asy
   const ids = (await listUserReservations(db, "alice")).map((r) => r.id);
   assert.ok(!ids.includes("bad1"));
 });
+
+// ---- Loyalty promo (PROMO30), validated on the server ------------------------
+
+const bookWith = (uid: string, startH: number, promoCode?: unknown, minutes = 60, connectorId = 1) =>
+  createReservationCore(db, uid, undefined, {
+    chargerId: "ch1", connectorId, start: at(startH), durationMinutes: minutes, promoCode,
+  }, NOW);
+
+/** Books n plain reservations (distinct slots), returns the next free start hour. */
+async function bookMany(uid: string, n: number, startH = 30): Promise<number> {
+  let h = startH;
+  for (let i = 0; i < n; i++, h += 2) await bookWith(uid, h);
+  return h;
+}
+
+test("promo: a plain booking earns 10 points and has no discount", async () => {
+  const r = await book("pat", 24, 60, 1);
+  const doc = (await db.collection("reservations").doc(r.id).get()).data()!;
+  assert.equal(doc["rewardPointsEarned"], 10);
+  assert.equal(doc["discountAmount"], 0);
+  assert.equal(doc["promoCode"], null);
+  assert.equal(doc["amount"], 26);
+});
+
+test("promo: refused until the user really has 100 points; then 30% off, and the points reset", async () => {
+  let h = await bookMany("quinn", 9); // 90 points
+  assert.equal(await code(bookWith("quinn", h, "PROMO30")), "failed-precondition");
+
+  h = await bookMany("quinn", 1, h); // the 10th reservation: 100 points
+  const r = await bookWith("quinn", h, "promo30"); // case-insensitive
+  assert.equal(r.amount, 18.2); // 26 - 30%
+  const doc = (await db.collection("reservations").doc(r.id).get()).data()!;
+  assert.equal(doc["originalAmount"], 26);
+  assert.equal(doc["discountAmount"], 7.8);
+  assert.equal(doc["discountPercent"], 30);
+  assert.equal(doc["promoCode"], "PROMO30");
+  assert.equal(doc["rewardPointsEarned"], 0);
+
+  // single use: the counter is back to 0
+  assert.equal(await code(bookWith("quinn", h + 2, "PROMO30")), "failed-precondition");
+});
+
+test("promo: a wrong code, other users' points and the app's own claims are ignored", async () => {
+  await bookMany("rita", 10);
+  assert.equal(await code(bookWith("sam", 24, "PROMO30")), "failed-precondition"); // sam has 0 points
+  assert.equal(await code(bookWith("rita", 400, "FREE100")), "failed-precondition");
+  assert.equal(await code(bookWith("rita", 402, "")), "ok"); // empty code = no promo
+  const r = await bookWith("rita", 404, undefined);
+  assert.equal(r.amount, 26);
+});
+
+test("promo: a cancelled reservation no longer counts towards the 100 points", async () => {
+  const ids: string[] = [];
+  let h = 30;
+  for (let i = 0; i < 10; i++, h += 2) ids.push((await bookWith("tess", h)).id);
+  await cancelReservationCore(db, "tess", ids[0], NOW);
+  assert.equal(await code(bookWith("tess", 500, "PROMO30")), "failed-precondition"); // 90 points
+});
+
+test("promo: rescheduling keeps the discount", async () => {
+  await bookMany("uma", 10);
+  const promoRes = await bookWith("uma", 600, "PROMO30"); // 26 -> 18.2
+  const moved = await rescheduleReservationCore(db, "uma", {
+    reservationId: promoRes.id, start: at(700), durationMinutes: 120,
+  }, NOW);
+  assert.equal(moved.amount, 35.7); // (50 kW * 2 h * 0.5 + 1) = 51, minus 30%
+  const doc = (await db.collection("reservations").doc(promoRes.id).get()).data()!;
+  assert.equal(doc["originalAmount"], 51);
+  assert.equal(doc["discountAmount"], 15.3);
+});
