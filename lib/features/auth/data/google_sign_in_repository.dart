@@ -67,6 +67,9 @@ class GoogleSignInRepository {
   }
 
   static GoogleSignInResult _fromGoogle(gsi.GoogleSignInException e) {
+    // For developers only (the user sees a friendly message): the technical
+    // reason, so a failure can be diagnosed from the terminal.
+    debugPrint('Google sign-in failed: code=${e.code} description=${e.description}');
     switch (e.code) {
       case gsi.GoogleSignInExceptionCode.canceled:
         return const GoogleSignInCancelled();
