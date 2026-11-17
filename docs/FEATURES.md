@@ -211,3 +211,32 @@ Known consequences to discuss with the team:
 - Connectors marked `busy` by the **old** flow stay busy: the app can no longer clear them. A one-off admin cleanup (or a scheduled Cloud Function) is needed.
 - The UI no longer shows a connector as "occupied" for a new reservation; a taken slot is refused by the server with a clear message instead.
 - `rewardPoints` stored on `users/{uid}` is a client-writable cache (not trusted). Promo eligibility is always recomputed on the server.
+
+## Sign in / sign up with Google
+
+"Continue with Google" is on the login screen and on the sign-up screen. Supported: **Android and web (Chrome)**; the button is hidden elsewhere (for example Windows).
+
+| Piece | File |
+|---|---|
+| Google + Firebase calls (web popup, or google_sign_in -> ID token -> Firebase credential) | `lib/features/auth/data/google_auth_service.dart` |
+| Sign-in use case, safe error messages, never throws | `lib/features/auth/data/google_sign_in_repository.dart`, `lib/features/auth/domain/google_sign_in_result.dart` |
+| Profile created ONLY on first sign-in (role `user`; an existing profile and role are never overwritten) | `lib/features/users/data/user_profile_repository.dart` |
+| Buttons | `lib/screens/auth/login_screen.dart`, `lib/screens/auth/SignUpPage.dart` |
+
+A Google account whose e-mail already has a password account is refused with a clear message ("sign in with your email and password"); accounts are not merged automatically.
+
+### Firebase console setup (project-wide, needs someone with edit access)
+1. **Authentication -> Sign-in method -> Google**: enable it and choose a support e-mail.
+2. **Project settings -> Android app `com.example.chargi`**: add the **SHA-1** of each developer's debug keystore (get it with `keytool -list -v -alias androiddebugkey -keystore %USERPROFILE%\.android\debug.keystore -storepass android`). A release build needs the SHA-1 of its own signing key.
+3. Download the new **`google-services.json`** and replace `android/app/google-services.json` (it must contain `oauth_client` entries).
+4. Copy the **Web client ID** (Google provider -> "Web SDK configuration"; it is not a secret).
+
+Run on Android with the Web client ID:
+
+```bash
+flutter run -d emulator-5554 --dart-define=GOOGLE_SERVER_CLIENT_ID=<web-client-id>.apps.googleusercontent.com
+```
+
+Until this is configured, the button shows "Google sign-in is not set up for this app yet". Chrome needs no client ID or SHA-1 (`flutter run -d chrome`).
+
+Notes: Firebase Authentication is **not** emulated by the local emulators, so a Google sign-in always creates a real account in the shared project. The Android emulator needs a Google account added in its settings to sign in.

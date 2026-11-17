@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:chargi/features/auth/data/google_sign_in_repository.dart';
+import 'package:chargi/features/auth/presentation/google_sign_in_action.dart';
 import 'package:chargi/screens/pages/main_navigation_page.dart';
 
 // Smart City colors
@@ -12,7 +14,17 @@ const kBorder = Color(0xFFD5DDD9);
 const kBackground = Color(0xFFF6F8F7);
 
 class SignUpPage extends StatefulWidget {
-  const SignUpPage({super.key});
+  const SignUpPage({
+    super.key,
+    this.googleSignIn,
+    this.onGoogleSignedIn,
+  });
+
+  /// Injectable for tests; default: the real Google + Firebase sign-in.
+  final GoogleSignInRepository? googleSignIn;
+
+  /// Called after a successful Google sign-up. Default: open the app.
+  final VoidCallback? onGoogleSignedIn;
 
   @override
   State<SignUpPage> createState() => _SignUpPageState();
@@ -20,6 +32,32 @@ class SignUpPage extends StatefulWidget {
 
 class _SignUpPageState extends State<SignUpPage> {
   final _formKey = GlobalKey<FormState>();
+
+  late final GoogleSignInRepository _google =
+      widget.googleSignIn ?? GoogleSignInRepository();
+  bool _googleLoading = false;
+
+  /// "Continue with Google" also creates the account when it is new: the
+  /// profile (role "user") is made on the first sign-in.
+  Future<void> _signUpWithGoogle() async {
+    if (_googleLoading || _loading) return;
+    setState(() => _googleLoading = true);
+    try {
+      final ok = await performGoogleSignIn(context, _google);
+      if (!ok || !mounted) return;
+
+      if (widget.onGoogleSignedIn != null) {
+        widget.onGoogleSignedIn!();
+      } else {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const MainNavigationPage()),
+          (route) => false,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
+    }
+  }
 
   final _nameCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
@@ -307,6 +345,67 @@ class _SignUpPageState extends State<SignUpPage> {
                           ),
                   ),
                 ),
+
+                // Google sign-up (hidden where Google sign-in is unavailable)
+                if (_google.isSupported) ...[
+                  const SizedBox(height: 16),
+                  Row(
+                    children: const [
+                      Expanded(child: Divider(color: kBorder)),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          'or',
+                          style: TextStyle(fontSize: 13, color: kMuted),
+                        ),
+                      ),
+                      Expanded(child: Divider(color: kBorder)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: OutlinedButton(
+                      onPressed: (_googleLoading || _loading)
+                          ? null
+                          : _signUpWithGoogle,
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        side: const BorderSide(color: kBorder),
+                        shape: const StadiumBorder(),
+                      ),
+                      child: _googleLoading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2.5),
+                            )
+                          : const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'G',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.red,
+                                  ),
+                                ),
+                                SizedBox(width: 10),
+                                Text(
+                                  'Continue with Google',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: kInk,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 24),
 
                 // Login link

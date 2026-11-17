@@ -4,10 +4,22 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'forgot_password_screen.dart';
 import 'SignUpPage.dart';
+import 'package:chargi/features/auth/data/google_sign_in_repository.dart';
+import 'package:chargi/features/auth/presentation/google_sign_in_action.dart';
 import 'package:chargi/screens/pages/main_navigation_page.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({
+    super.key,
+    this.googleSignIn,
+    this.onGoogleSignedIn,
+  });
+
+  /// Injectable for tests; default: the real Google + Firebase sign-in.
+  final GoogleSignInRepository? googleSignIn;
+
+  /// Called after a successful Google sign-in. Default: open the app.
+  final VoidCallback? onGoogleSignedIn;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -15,6 +27,30 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
+
+  late final GoogleSignInRepository _google =
+      widget.googleSignIn ?? GoogleSignInRepository();
+  bool _googleLoading = false;
+
+  Future<void> _signInWithGoogle() async {
+    if (_googleLoading || _isLoading) return;
+    setState(() => _googleLoading = true);
+    try {
+      final ok = await performGoogleSignIn(context, _google);
+      if (!ok || !mounted) return;
+
+      if (widget.onGoogleSignedIn != null) {
+        widget.onGoogleSignedIn!();
+      } else {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const MainNavigationPage()),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
+    }
+  }
 
   final TextEditingController _emailController =
       TextEditingController();
@@ -425,16 +461,19 @@ class _LoginScreenState extends State<LoginScreen> {
                 // Google and Apple buttons
                 Row(
                   children: [
-                    Expanded(
-                      child: _socialButton(
-                        text: 'Google',
-                        icon: 'G',
-                        onPressed: () {
-                          _showNotImplemented('Google');
-                        },
+                    // Hidden on platforms where Google sign-in is unavailable.
+                    if (_google.isSupported) ...[
+                      Expanded(
+                        child: _socialButton(
+                          text: 'Google',
+                          icon: 'G',
+                          loading: _googleLoading,
+                          onPressed:
+                              _googleLoading ? null : _signInWithGoogle,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
+                      const SizedBox(width: 10),
+                    ],
                     Expanded(
                       child: _socialButton(
                         text: 'Apple',
@@ -508,7 +547,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget _socialButton({
     required String text,
     required String icon,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
+    bool loading = false,
   }) {
     return SizedBox(
       height: 42,
@@ -524,14 +564,21 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              icon,
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.bold,
-                color: text == 'Google' ? Colors.red : Colors.black,
+            if (loading)
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Text(
+                icon,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  color: text == 'Google' ? Colors.red : Colors.black,
+                ),
               ),
-            ),
             const SizedBox(width: 8),
             Text(
               text,

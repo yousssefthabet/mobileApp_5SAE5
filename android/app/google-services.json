@@ -12,7 +12,20 @@
           "package_name": "com.example.chargi"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "52480821772-p9ug7ho7dj3cl9ehu0acugc219rmi0o9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.chargi",
+            "certificate_hash": "e93f70026cfa50f2c27226ea86d0f6bf128be246"
+          }
+        },
+        {
+          "client_id": "52480821772-g4e0vkepis0o0dfsepr2doa4i2fiu1hs.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAc5LmnXBGmlCVM5Kkw0pRx31JkHSYGbEQ"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "52480821772-g4e0vkepis0o0dfsepr2doa4i2fiu1hs.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "52480821772-8f6ldn8mk6grfqjv7s2dp0vp4o5d68v3.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.chargi"
+              }
+            }
+          ]
         }
       }
     }
