@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:chargi/services/report_service.dart';
+import 'package:chargi/widgets/ai_report_view.dart';
+import 'report_trash_page.dart';
 
 class ReportDetailsPage extends StatelessWidget {
   final String reportId;
@@ -44,6 +47,94 @@ class ReportDetailsPage extends StatelessWidget {
       return '$hour:$minute';
     }
     return 'today';
+  }
+
+  Future<void> _editReport(BuildContext context, Map<String, dynamic> data) async {
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReportTrashPage(
+          showBottomNavBar: false,
+          editReportId: reportDocId,
+          initialData: data,
+        ),
+      ),
+    );
+    // The StreamBuilder refreshes the page by itself after a save.
+  }
+
+  Future<void> _deleteReport(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete this report?'),
+        content: const Text(
+          'The report and its photos will be permanently removed. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    try {
+      await ReportService.instance.deleteOwnReport(reportDocId!);
+      navigator.pop();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Report deleted'), backgroundColor: primaryGreen),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not delete report: $e'), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
+  Widget _buildDeletedState(BuildContext context) {
+    return Scaffold(
+      backgroundColor: backgroundColor,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: textDark),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
+      body: const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.delete_sweep_outlined, size: 52, color: textMuted),
+              SizedBox(height: 12),
+              Text(
+                'This report no longer exists',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: textDark),
+              ),
+              SizedBox(height: 6),
+              Text(
+                'It was deleted. Check your notifications for details.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: textMuted),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -109,6 +200,10 @@ class ReportDetailsPage extends StatelessWidget {
             );
           }
 
+          if (snapshot.data != null && !snapshot.data!.exists) {
+            return _buildDeletedState(context);
+          }
+
           final data = snapshot.data?.data();
           final displayId = (data?['reference'] as String?) ?? reportId;
           final title = (data?['problemTitle'] as String?) ?? problemTitle;
@@ -116,7 +211,12 @@ class ReportDetailsPage extends StatelessWidget {
           final status = (data?['status'] as String?) ?? 'sent';
           final worker = (data?['workerName'] as String?) ?? workerName;
           final arrival = (data?['estimatedArrival'] as String?) ?? estimatedArrival;
-          final photoBase64 = data?['photoBase64'] as String?;
+          final description = (data?['description'] as String?)?.trim();
+          final photos = <String>[
+            ...((data?['photosBase64'] as List?) ?? const []).whereType<String>(),
+          ];
+          final legacyPhoto = data?['photoBase64'] as String?;
+          if (photos.isEmpty && legacyPhoto != null) photos.add(legacyPhoto);
           final createdTime = _formatTimestamp(data?['createdAt']);
 
           return _buildContent(
@@ -128,7 +228,9 @@ class ReportDetailsPage extends StatelessWidget {
             worker: worker,
             arrival: arrival,
             sentTime: createdTime,
-            photoBase64: photoBase64,
+            description: description,
+            photos: photos,
+            ownerData: data,
           );
         },
       );
@@ -155,7 +257,9 @@ class ReportDetailsPage extends StatelessWidget {
     required String worker,
     required String arrival,
     required String sentTime,
-    String? photoBase64,
+    String? description,
+    List<String> photos = const [],
+    Map<String, dynamic>? ownerData,
   }) {
     Color badgeBg;
     Color badgeText;
@@ -170,7 +274,7 @@ class ReportDetailsPage extends StatelessWidget {
       case 'in_progress':
         badgeBg = orangeBadgeBg;
         badgeText = orangeBadgeText;
-        badgeLabel = 'In progress';
+        badgeLabel = 'Work in progress';
         break;
       case 'assigned':
         badgeBg = blueBadgeBg;
@@ -217,6 +321,21 @@ class ReportDetailsPage extends StatelessWidget {
           ),
         ),
         centerTitle: false,
+        actions: [
+          if (ownerData != null && reportDocId != null) ...[
+            if (status != 'resolved')
+              IconButton(
+                tooltip: 'Edit report',
+                icon: const Icon(Icons.edit_outlined, color: textDark),
+                onPressed: () => _editReport(context, ownerData),
+              ),
+            IconButton(
+              tooltip: 'Delete report',
+              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+              onPressed: () => _deleteReport(context),
+            ),
+          ],
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -233,12 +352,39 @@ class ReportDetailsPage extends StatelessWidget {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(18),
-                child: photoBase64 != null
-                    ? Image.memory(
-                        base64Decode(photoBase64),
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: 170,
+                child: photos.isNotEmpty
+                    ? PageView.builder(
+                        itemCount: photos.length,
+                        itemBuilder: (context, index) => Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Image.memory(
+                              base64Decode(photos[index]),
+                              fit: BoxFit.cover,
+                            ),
+                            if (photos.length > 1)
+                              Positioned(
+                                bottom: 10,
+                                right: 12,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.55),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    '${index + 1}/${photos.length}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       )
                     : Stack(
                         children: [
@@ -309,6 +455,57 @@ class ReportDetailsPage extends StatelessWidget {
               ),
             ),
 
+            if (description != null && description.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: cardBorder, width: 1),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'DESCRIPTION',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6,
+                        color: Color(0xFF7E8F8B),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      description,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: textDark,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
+            if (ownerData?['aiReview'] is Map) ...[
+              const SizedBox(height: 16),
+              AiStatusBanner(
+                compact: true,
+                status: ((ownerData!['aiReview'] as Map)['status'] as String?) ?? 'NEEDS_REVIEW',
+                explanation: ((ownerData!['aiReview'] as Map)['explanation'] as String?) ?? '',
+              ),
+            ],
+            if (ownerData?['aiReport'] is Map) ...[
+              const SizedBox(height: 12),
+              AiReportCard(
+                report: Map<String, dynamic>.from(ownerData!['aiReport'] as Map),
+              ),
+            ],
+
             const SizedBox(height: 24),
 
             // 3. Vertical Timeline Stepper Card (Figure 6)
@@ -333,15 +530,15 @@ class ReportDetailsPage extends StatelessWidget {
                     isCurrent: isAssignedCurrent,
                     isLast: false,
                     title: 'Assigned',
-                    subtitle: isAssignedCompleted ? 'Assigned to team' : 'Waiting',
+                    subtitle: isAssignedCompleted ? 'Assigned to $worker' : 'Waiting',
                   ),
                   _buildTimelineStep(
                     isCompleted: isInProgressCompleted,
                     isCurrent: isInProgressCurrent,
                     isLast: false,
-                    title: 'In progress',
+                    title: 'Work in progress',
                     subtitle: isInProgressCompleted
-                        ? (status == 'resolved' ? 'Completed' : 'Worker on the way')
+                        ? (status == 'resolved' ? 'Completed' : arrival)
                         : 'Waiting',
                   ),
                   _buildTimelineStep(
@@ -349,7 +546,7 @@ class ReportDetailsPage extends StatelessWidget {
                     isCurrent: isResolvedCurrent,
                     isLast: true,
                     title: 'Resolved',
-                    subtitle: isResolvedCompleted ? 'Area cleaned' : 'Waiting',
+                    subtitle: isResolvedCompleted ? 'Problem fixed' : 'Waiting',
                   ),
                 ],
               ),

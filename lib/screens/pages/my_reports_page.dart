@@ -279,7 +279,7 @@ class _MyReportsPageState extends State<MyReportsPage> {
                           icon: Icons.cleaning_services_outlined,
                           title: 'No resolved reports yet',
                           description:
-                              'Reports that have been cleaned and resolved by municipal workers will show up here.',
+                              'Reports that have been fixed and resolved by workers will show up here.',
                           buttonText: null,
                           onAction: null,
                         );
@@ -431,7 +431,7 @@ class _MyReportsPageState extends State<MyReportsPage> {
     final data = doc.data() ?? {};
     final docId = doc.id;
     final reference = (data['reference'] as String?) ?? '#${docId.substring(0, 6).toUpperCase()}';
-    final problemTitle = (data['problemTitle'] as String?) ?? 'Trash report';
+    final problemTitle = (data['problemTitle'] as String?) ?? 'Report';
     final location = (data['location'] as String?) ?? 'Tunis';
     final dateStr = _formatDate(data['createdAt']);
     final status = (data['status'] as String? ?? 'sent').toLowerCase();
@@ -453,9 +453,9 @@ class _MyReportsPageState extends State<MyReportsPage> {
     } else if (status == 'in_progress') {
       badgeBg = orangeBadgeBackground;
       badgeText = orangeBadgeText;
-      badgeLabel = 'In progress';
+      badgeLabel = 'Work in progress';
       stepIndex = 2;
-      bannerText = '$worker is on the way · $eta';
+      bannerText = 'Work in progress by $worker · $eta';
     } else {
       badgeBg = mintBadgeBackground;
       badgeText = mintBadgeText;
@@ -662,7 +662,7 @@ class _MyReportsPageState extends State<MyReportsPage> {
     final data = doc.data() ?? {};
     final docId = doc.id;
     final reference = (data['reference'] as String?) ?? '#${docId.substring(0, 6).toUpperCase()}';
-    final problemTitle = (data['problemTitle'] as String?) ?? 'Trash report';
+    final problemTitle = (data['problemTitle'] as String?) ?? 'Report';
     final location = (data['location'] as String?) ?? 'Tunis';
     final dateStr = _formatDate(data['createdAt']);
 

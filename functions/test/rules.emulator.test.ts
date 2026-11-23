@@ -116,6 +116,44 @@ async function seedUser(uid: string, data: Record<string, unknown>): Promise<voi
   });
 }
 
+// ---- Reports module (citizen reports handled by workers) -------------------
+
+test("reports: the author has full access, other citizens none", async () => {
+  const ann = env.authenticatedContext("ann").firestore();
+  const bob = env.authenticatedContext("bob").firestore();
+  await assertSucceeds(setDoc(doc(ann, "users/ann/reports/r1"), { title: "Pothole", status: "sent" }));
+  await assertSucceeds(getDoc(doc(ann, "users/ann/reports/r1")));
+  await assertFails(getDoc(doc(bob, "users/ann/reports/r1")));
+  await assertFails(updateDoc(doc(bob, "users/ann/reports/r1"), { status: "resolved" }));
+});
+
+test("reports: a worker or an admin can handle reports; a normal user cannot", async () => {
+  await seedUser("wendy", { name: "W", role: "worker" });
+  await seedUser("adam", { name: "A", role: "admin" });
+  await seedUser("ann", { name: "Ann", role: "user" });
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "users/ann/reports/r1"), { title: "Pothole", status: "sent" });
+  });
+  for (const uid of ["wendy", "adam"]) {
+    const db = env.authenticatedContext(uid).firestore();
+    await assertSucceeds(getDoc(doc(db, "users/ann/reports/r1")));
+    await assertSucceeds(updateDoc(doc(db, "users/ann/reports/r1"), { status: "assigned" }));
+    await assertSucceeds(setDoc(doc(db, "users/ann/notifications/n_" + uid), { title: "Update" }));
+  }
+  // a plain user cannot touch someone else's report or notify them
+  await seedUser("bob", { name: "B", role: "user" });
+  const bob = env.authenticatedContext("bob").firestore();
+  await assertFails(updateDoc(doc(bob, "users/ann/reports/r1"), { status: "resolved" }));
+  await assertFails(setDoc(doc(bob, "users/ann/notifications/n_bob"), { title: "x" }));
+});
+
+test("reports: nobody can make themselves a worker to reach other people's reports", async () => {
+  await seedUser("mallory", { name: "M", role: "user" });
+  const mallory = env.authenticatedContext("mallory").firestore();
+  await assertFails(updateDoc(doc(mallory, "users/mallory"), { role: "worker" }));
+  await assertFails(setDoc(doc(mallory, "users/mallory"), { role: "worker" }, { merge: true }));
+});
+
 test("roles: sign-up creates the profile with role 'user' only", async () => {
   const carol = env.authenticatedContext("carol").firestore();
   await assertSucceeds(setDoc(doc(carol, "users/carol"), { name: "C", email: "c@x.test", role: "user" }));

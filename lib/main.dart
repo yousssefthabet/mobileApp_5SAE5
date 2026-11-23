@@ -46,6 +46,9 @@ void _connectToEmulatorsIfRequested() {
           : 'localhost');
 
   FirebaseFunctions.instance.useFunctionsEmulator(host, 5001);
+  // The report AI function lives in another region (see ReportAiService).
+  FirebaseFunctions.instanceFor(region: 'europe-west1')
+      .useFunctionsEmulator(host, 5001);
   FirebaseFirestore.instance.useFirestoreEmulator(host, 8185);
   debugPrint('Using Firebase emulators at $host (functions 5001, firestore 8185)');
 }

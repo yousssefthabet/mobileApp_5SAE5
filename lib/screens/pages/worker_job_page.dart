@@ -1,7 +1,12 @@
-// ignore_for_file: deprecated_member_use
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
+import 'package:chargi/services/report_service.dart';
+import 'worker_report_page.dart';
 
+/// Worker portal: lists every user's reports so a worker can pick one,
+/// change its status, edit it or delete it.
 class WorkerJobPage extends StatefulWidget {
   final VoidCallback? onNavigateToHome;
   final VoidCallback? onNavigateToProfile;
@@ -18,303 +23,432 @@ class WorkerJobPage extends StatefulWidget {
   State<WorkerJobPage> createState() => _WorkerJobPageState();
 }
 
+/// Filters shown as chips. `open` = everything that is not resolved.
+enum _Filter { open, aiReview, sent, assigned, inProgress, resolved, all }
+
 class _WorkerJobPageState extends State<WorkerJobPage> {
-  int _currentWorkerNavIndex = 0;
-  bool _jobStarted = false;
-  bool _afterPhotoUploaded = false;
+  _Filter _filter = _Filter.open;
 
   static const Color primaryGreen = Color(0xFF086B5B);
   static const Color backgroundColor = Color(0xFFF7F9F8);
   static const Color cardBorderColor = Color(0xFFE8ECEB);
   static const Color onDutyBadgeBg = Color(0xFFDDF0EB);
-  static const Color orangePriorityBg = Color(0xFFFDEEE5);
-  static const Color orangePriorityText = Color(0xFFC05218);
+  static const Color textDark = Color(0xFF1E2926);
+  static const Color textMuted = Color(0xFF7A8B86);
+
+  late final Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _reportsStream =
+      ReportService.instance.watchAllReports();
+
+  int get _navIndex => _filter == _Filter.resolved ? 2 : 0;
+
+  bool _matches(String status, Object? aiStatus) {
+    switch (_filter) {
+      case _Filter.open:
+        return status != ReportStatus.resolved;
+      case _Filter.sent:
+        return status == ReportStatus.sent;
+      case _Filter.assigned:
+        return status == ReportStatus.assigned;
+      case _Filter.inProgress:
+        return status == ReportStatus.inProgress;
+      case _Filter.resolved:
+        return status == ReportStatus.resolved;
+      case _Filter.aiReview:
+        return status != ReportStatus.resolved && aiStatus == 'NEEDS_REVIEW';
+      case _Filter.all:
+        return true;
+    }
+  }
+
+  String _filterLabel(_Filter f) {
+    switch (f) {
+      case _Filter.open:
+        return 'To do';
+      case _Filter.sent:
+        return 'New';
+      case _Filter.assigned:
+        return 'Assigned';
+      case _Filter.inProgress:
+        return 'Work in progress';
+      case _Filter.resolved:
+        return 'Resolved';
+      case _Filter.aiReview:
+        return 'Needs review';
+      case _Filter.all:
+        return 'All';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: backgroundColor,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header
-              const Text(
-                'WORKER',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6,
-                  color: Color(0xFF7E8F8B),
-                ),
-              ),
-              const SizedBox(height: 4),
+        child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+          stream: _reportsStream,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return _buildError(snapshot.error);
+            }
+            if (!snapshot.hasData) {
+              return const Center(child: CircularProgressIndicator(color: primaryGreen));
+            }
 
-              // Title Row with "On duty" badge
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    "Today's jobs",
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF1E2926),
-                    ),
+            final docs = snapshot.data!;
+            final statuses =
+                docs.map((d) => ReportStatus.normalize(d.data()['status'] as String?)).toList();
+            final newCount = statuses.where((s) => s == ReportStatus.sent).length;
+            final activeCount = statuses
+                .where((s) => s == ReportStatus.assigned || s == ReportStatus.inProgress)
+                .length;
+            final doneCount = statuses.where((s) => s == ReportStatus.resolved).length;
+
+            final visible = [
+              for (var i = 0; i < docs.length; i++)
+                if (_matches(statuses[i], docs[i].data()['aiStatus'])) docs[i],
+            ];
+
+            return ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+              children: [
+                const Text(
+                  'WORKER',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.6,
+                    color: Color(0xFF7E8F8B),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: onDutyBadgeBg,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Text(
-                      'On duty',
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Reports to handle',
                       style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: primaryGreen,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w700,
+                        color: textDark,
                       ),
                     ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 20),
-
-              // 1. Three Stats Cards (Assigned, Done, Avg time)
-              Row(
-                children: [
-                  _buildStatCard(count: '3', label: 'Assigned'),
-                  const SizedBox(width: 12),
-                  _buildStatCard(count: '1', label: 'Done'),
-                  const SizedBox(width: 12),
-                  _buildStatCard(count: '12 min', label: 'Avg time'),
-                ],
-              ),
-
-              const SizedBox(height: 22),
-
-              // 2. Active Job Card (#1042 · Overflowing bin)
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: cardBorderColor, width: 1),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
-                      blurRadius: 14,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Mini Map Preview with Trash Pin
-                    ClipRRect(
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                      child: SizedBox(
-                        height: 140,
-                        width: double.infinity,
-                        child: Stack(
-                          children: [
-                            Positioned.fill(
-                              child: CustomPaint(
-                                painter: _MiniMapPainter(),
-                              ),
-                            ),
-                            // Trash Marker Pin
-                            Center(
-                              child: Container(
-                                width: 42,
-                                height: 42,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFC04C16),
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: const Color(0xFFC04C16).withOpacity(0.35),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 3),
-                                    ),
-                                  ],
-                                  border: Border.all(
-                                    color: Colors.white,
-                                    width: 2.5,
-                                  ),
-                                ),
-                                child: const Icon(
-                                  Icons.delete_outline,
-                                  color: Colors.white,
-                                  size: 22,
-                                ),
-                              ),
-                            ),
-                          ],
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: onDutyBadgeBg,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Text(
+                        'On duty',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: primaryGreen,
                         ),
                       ),
                     ),
-
-                    Padding(
-                      padding: const EdgeInsets.all(18),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Title & Location
-                          const Text(
-                            'Job #1042 · Overflowing bin',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF1E2926),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'Rue de la Liberté, near Central Square',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF7A8B86),
-                            ),
-                          ),
-
-                          const SizedBox(height: 14),
-
-                          // Badges Row: High priority, 1.2 km, 20 min ago
-                          Row(
-                            children: [
-                              _buildPillBadge(
-                                label: 'High priority',
-                                bgColor: orangePriorityBg,
-                                textColor: orangePriorityText,
-                              ),
-                              const SizedBox(width: 8),
-                              _buildPillBadge(
-                                label: '1.2 km',
-                                bgColor: const Color(0xFFEFF3F1),
-                                textColor: const Color(0xFF556561),
-                              ),
-                              const SizedBox(width: 8),
-                              _buildPillBadge(
-                                label: '20 min ago',
-                                bgColor: const Color(0xFFEFF3F1),
-                                textColor: const Color(0xFF556561),
-                              ),
-                            ],
-                          ),
-
-                          const SizedBox(height: 20),
-
-                          // Action Button 1: Start job and navigate
-                          SizedBox(
-                            width: double.infinity,
-                            height: 48,
-                            child: ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  _jobStarted = !_jobStarted;
-                                });
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    backgroundColor: primaryGreen,
-                                    content: Text(
-                                      _jobStarted
-                                          ? 'Job #1042 Started! Navigation active.'
-                                          : 'Job navigation stopped.',
-                                    ),
-                                  ),
-                                );
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: primaryGreen,
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(24),
-                                ),
-                              ),
-                              child: Text(
-                                _jobStarted ? 'Job In Progress (Navigating...)' : 'Start job and navigate',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-
-                          const SizedBox(height: 12),
-
-                          // Action Button 2: Upload after photo
-                          SizedBox(
-                            width: double.infinity,
-                            height: 48,
-                            child: OutlinedButton(
-                              onPressed: () {
-                                setState(() {
-                                  _afterPhotoUploaded = !_afterPhotoUploaded;
-                                });
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      _afterPhotoUploaded
-                                          ? 'After photo uploaded! Marked as Done.'
-                                          : 'Upload cancelled',
-                                    ),
-                                  ),
-                                );
-                              },
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: primaryGreen,
-                                side: const BorderSide(
-                                  color: primaryGreen,
-                                  width: 1.5,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(24),
-                                ),
-                              ),
-                              child: Text(
-                                _afterPhotoUploaded ? 'After photo uploaded ✓' : 'Upload after photo',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   ],
                 ),
-              ),
+                const SizedBox(height: 20),
 
-              const SizedBox(height: 24),
-            ],
-          ),
+                Row(
+                  children: [
+                    _buildStatCard(count: '$newCount', label: 'New'),
+                    const SizedBox(width: 12),
+                    _buildStatCard(count: '$activeCount', label: 'Active'),
+                    const SizedBox(width: 12),
+                    _buildStatCard(count: '$doneCount', label: 'Done'),
+                  ],
+                ),
+                const SizedBox(height: 18),
+
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final f in _Filter.values)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(_filterLabel(f)),
+                            selected: _filter == f,
+                            onSelected: (_) => setState(() => _filter = f),
+                            selectedColor: primaryGreen,
+                            backgroundColor: Colors.white,
+                            side: BorderSide(
+                              color: _filter == f ? primaryGreen : cardBorderColor,
+                            ),
+                            labelStyle: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: _filter == f ? Colors.white : textDark,
+                            ),
+                            showCheckmark: false,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                if (visible.isEmpty)
+                  _buildEmpty()
+                else
+                  for (final doc in visible) ...[
+                    _buildReportCard(doc),
+                    const SizedBox(height: 12),
+                  ],
+              ],
+            );
+          },
         ),
       ),
       bottomNavigationBar: widget.showBottomNavBar
           ? CustomBottomNavigationBar(
               isWorker: true,
-              currentIndex: _currentWorkerNavIndex,
+              currentIndex: _navIndex,
               onTap: (index) {
-                setState(() {
-                  _currentWorkerNavIndex = index;
-                });
-                if (index == 1 && widget.onNavigateToHome != null) {
-                  widget.onNavigateToHome!();
-                } else if (index == 3 && widget.onNavigateToProfile != null) {
-                  widget.onNavigateToProfile!();
+                if (index == 0) {
+                  setState(() => _filter = _Filter.open);
+                } else if (index == 1) {
+                  widget.onNavigateToHome?.call();
+                } else if (index == 2) {
+                  setState(() => _filter = _Filter.resolved);
+                } else if (index == 3) {
+                  widget.onNavigateToProfile?.call();
                 }
               },
             )
           : null,
+    );
+  }
+
+  Widget _buildReportCard(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    final status = ReportStatus.normalize(data['status'] as String?);
+    final title = (data['problemTitle'] as String?)?.trim().isNotEmpty == true
+        ? data['problemTitle'] as String
+        : 'Report';
+    final reference =
+        (data['reference'] as String?) ?? '#${doc.id.substring(0, 6).toUpperCase()}';
+    final location = (data['location'] as String?) ?? 'Unknown location';
+    final description = (data['description'] as String?)?.trim() ?? '';
+    final photos = (data['photosBase64'] as List?)?.whereType<String>().toList() ?? [];
+    final firstPhoto = photos.isNotEmpty ? photos.first : data['photoBase64'] as String?;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => WorkerReportPage(reportRef: doc.reference)),
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: cardBorderColor),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                width: 70,
+                height: 70,
+                child: firstPhoto != null
+                    ? Image.memory(
+                        base64Decode(firstPhoto),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _photoPlaceholder(status),
+                      )
+                    : _photoPlaceholder(status),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: textDark,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      _statusBadge(status),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          '$reference · ${_formatDate(data['createdAt'])}',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: textMuted),
+                        ),
+                      ),
+                      if (data['aiStatus'] == 'NEEDS_REVIEW') ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFDEEE5),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.manage_search, size: 12, color: Color(0xFFC05218)),
+                              SizedBox(width: 3),
+                              Text(
+                                'AI: needs review',
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFFC05218),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  if ((data['aiReport'] as Map?)?['urgency'] is String) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      'Urgency: ${(data['aiReport'] as Map)['urgency']} · '
+                      '${(data['aiReport'] as Map)['responsible_department'] ?? ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF3C4D48),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.location_on_outlined, size: 14, color: textMuted),
+                      const SizedBox(width: 3),
+                      Expanded(
+                        child: Text(
+                          location,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: textMuted),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (description.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5, color: Color(0xFF3C4D48)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _photoPlaceholder(String status) {
+    return Container(
+      color: ReportStatus.background(status),
+      child: Icon(ReportStatus.icon(status), color: ReportStatus.foreground(status)),
+    );
+  }
+
+  Widget _statusBadge(String status) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: ReportStatus.background(status),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        ReportStatus.label(status),
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: ReportStatus.foreground(status),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmpty() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: cardBorderColor),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.inbox_outlined, size: 44, color: textMuted),
+          const SizedBox(height: 10),
+          Text(
+            'No reports in "${_filterLabel(_filter)}"',
+            style: const TextStyle(fontWeight: FontWeight.w700, color: textDark),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildError(Object? error) {
+    final denied = error is FirebaseException && error.code == 'permission-denied';
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(denied ? Icons.lock_outline : Icons.error_outline,
+                size: 48, color: Colors.redAccent),
+            const SizedBox(height: 12),
+            Text(
+              denied ? 'Worker access required' : 'Could not load reports',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: textDark),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              denied
+                  ? "This account is not a worker. In the Firebase console, add the field role: 'worker' to this user's document in the users collection."
+                  : '$error',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: textMuted),
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton(
+              onPressed: widget.onNavigateToHome,
+              child: const Text('Back to the app'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -326,13 +460,6 @@ class _WorkerJobPageState extends State<WorkerJobPage> {
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: cardBorderColor, width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.02),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -342,7 +469,7 @@ class _WorkerJobPageState extends State<WorkerJobPage> {
               style: const TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFF1E2926),
+                color: textDark,
               ),
             ),
             const SizedBox(height: 4),
@@ -351,7 +478,7 @@ class _WorkerJobPageState extends State<WorkerJobPage> {
               style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
-                color: Color(0xFF7A8B86),
+                color: textMuted,
               ),
             ),
           ],
@@ -360,70 +487,14 @@ class _WorkerJobPageState extends State<WorkerJobPage> {
     );
   }
 
-  Widget _buildPillBadge({
-    required String label,
-    required Color bgColor,
-    required Color textColor,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: textColor,
-        ),
-      ),
-    );
+  static String _formatDate(dynamic ts) {
+    if (ts is! Timestamp) return 'just now';
+    final d = ts.toDate();
+    final diff = DateTime.now().difference(d);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+    if (diff.inHours < 24) return '${diff.inHours} h ago';
+    if (diff.inDays < 7) return '${diff.inDays} d ago';
+    return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
   }
-}
-
-/// Mini Map Painter for Worker Job Card Preview
-class _MiniMapPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final bgPaint = Paint()..color = const Color(0xFFEFF4F1);
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
-
-    final greenPark = Paint()..color = const Color(0xFFE2EBE5);
-    final parkPath = Path()
-      ..moveTo(0, size.height * 0.3)
-      ..lineTo(size.width * 0.7, 0)
-      ..lineTo(size.width, size.height * 0.4)
-      ..lineTo(size.width * 0.4, size.height)
-      ..close();
-    canvas.drawPath(parkPath, greenPark);
-
-    final roadBorder = Paint()
-      ..color = const Color(0xFFDFE7E3)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 26;
-
-    final roadWhite = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 22;
-
-    final roadPath = Path()
-      ..moveTo(-10, size.height * 0.6)
-      ..cubicTo(
-        size.width * 0.4,
-        size.height * 0.75,
-        size.width * 0.6,
-        size.height * 0.25,
-        size.width + 10,
-        size.height * 0.4,
-      );
-
-    canvas.drawPath(roadPath, roadBorder);
-    canvas.drawPath(roadPath, roadWhite);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

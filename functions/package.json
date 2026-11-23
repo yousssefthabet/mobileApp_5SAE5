@@ -13,6 +13,7 @@
     "test:all": "tsc && node --test lib/test/domain.test.js lib/test/chatbot.nlu.test.js lib/test/reservations.emulator.test.js lib/test/chatbot.dialog.emulator.test.js lib/test/rules.emulator.test.js",
     "serve": "npm run build && firebase emulators:start --only functions,firestore",
     "deploy": "firebase deploy --only functions",
+    "test:reports": "node --test reports/test/decision.test.js",
     "test:chat": "tsc && node --test lib/test/chatbot.dialog.emulator.test.js",
     "emulators": "npm run build && firebase emulators:start --only functions,firestore --project chargi-b044b --config ../firebase.json",
     "seed": "node scripts/seed-emulator.js"

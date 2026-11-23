@@ -240,3 +240,21 @@ flutter run -d emulator-5554 --dart-define=GOOGLE_SERVER_CLIENT_ID=<web-client-i
 Until this is configured, the button shows "Google sign-in is not set up for this app yet". Chrome needs no client ID or SHA-1 (`flutter run -d chrome`).
 
 Notes: Firebase Authentication is **not** emulated by the local emulators, so a Google sign-in always creates a real account in the shared project. The Android emulator needs a Google account added in its settings to sign in.
+
+
+## Module Signalements (intégré depuis mobileApp_5SAE5-repport.zip)
+
+Les citoyens signalent un problème (photos, lieu), l'IA vérifie les photos et rédige le rapport, un agent le traite et le citoyen est notifié. Détails et questions de soutenance : `docs/report_module.md`.
+
+| Élément | Où |
+|---|---|
+| Écrans, brouillons SQLite, services | `lib/screens/pages/report_*`, `lib/data/local/`, `lib/services/report_service.dart`, `report_ai_service.dart` |
+| Fonction `analyzeReport` (OpenAI, région europe-west1) | `functions/reports/` (JavaScript, exportée par `functions/src/index.ts`) |
+| Règles | `firestore.rules` : sous-collections `reports` et `notifications` de l'utilisateur, lecture groupée pour les agents |
+
+Choix d'intégration avec la gestion des rôles :
+- Le rôle `worker` ou `admin` s'attribue uniquement depuis la console. Les boutons « Devenir Agent » / « Quitter » du module (qui écrivaient le rôle depuis l'application) ont été retirés : les règles les refuseraient et ils permettaient de s'auto-promouvoir.
+- Un agent est reconnu par `UserRole.canUseWorkerPortal` (application) et `isWorker()` (règles) : même critère.
+- Tests : `npm run test:reports` (11), et 3 tests de règles dans `rules.emulator.test.ts`.
+
+Avant un déploiement : secret `OPENAI_API_KEY` (`firebase functions:secrets:set OPENAI_API_KEY`) et forfait Blaze. `ReportAiService` contient un emplacement de clé Gemini (`YOUR_GEMINI_API_KEY_HERE`) : ne jamais y mettre une vraie clé, elle serait lisible dans l'APK.

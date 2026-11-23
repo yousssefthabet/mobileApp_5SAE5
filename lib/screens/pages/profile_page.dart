@@ -1,9 +1,10 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:chargi/features/users/domain/user_role.dart';
 import 'package:chargi/features/users/presentation/role_badge.dart';
+import 'package:chargi/features/users/domain/user_role.dart';
 import 'package:chargi/widgets/BottomNavigationBar.dart';
 import 'package:chargi/screens/auth/login_screen.dart';
 
@@ -14,6 +15,7 @@ import 'my_reservations_page.dart';
 import 'rewards_page.dart';
 import 'package:chargi/services/station_availability_service.dart';
 import 'package:chargi/services/reward_service.dart';
+import 'package:chargi/services/report_service.dart';
 
 class ProfilePage extends StatefulWidget {
   final VoidCallback? onNavigateToMap;
@@ -51,6 +53,7 @@ class _ProfilePageState extends State<ProfilePage> {
   int _totalReservations = 0;
   bool _metricsLoaded = false;
   String _userName = '';
+  bool _isWorker = false;
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _reportsSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
@@ -102,6 +105,7 @@ class _ProfilePageState extends State<ProfilePage> {
         final docPoints = (data?['rewardPoints'] as num?)?.toInt() ?? 0;
         setState(() {
           _userName = (data?['name'] as String?) ?? user.displayName ?? '';
+          _isWorker = UserRole.fromData(data).canUseWorkerPortal;
           _userPoints = docPoints;
         });
       }
@@ -271,7 +275,71 @@ class _ProfilePageState extends State<ProfilePage> {
                 ],
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
+
+              // ===============================================================
+              // WORKER / CITIZEN MODE TOGGLE BANNER (Top of Profile)
+              // ===============================================================
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _isWorker ? const Color(0xFFDDF0EB) : const Color(0xFFE0F2FE),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _isWorker ? primaryGreen : const Color(0xFF0284C7),
+                    width: 1.5,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      _isWorker ? Icons.badge : Icons.engineering_outlined,
+                      color: _isWorker ? primaryGreen : const Color(0xFF0284C7),
+                      size: 28,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _isWorker ? 'Mode Agent (Worker)' : 'Mode Citoyen (Civilian)',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                              color: _isWorker ? primaryGreen : const Color(0xFF0369A1),
+                            ),
+                          ),
+                          Text(
+                            _isWorker
+                                ? 'Gérer les signalements municipaux'
+                                : 'Accès aux signalements citoyens',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF4B5563),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // The role is granted by an administrator only (never from the
+                    // app): a worker gets the portal button, nobody gets a switch.
+                    if (_isWorker)
+                      ElevatedButton(
+                        onPressed: widget.onSwitchToWorkerMode,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primaryGreen,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        child: const Text('Portail', style: TextStyle(fontSize: 12)),
+                      ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
 
               // 2. Loyalty Rewards Banner
               InkWell(
@@ -501,6 +569,30 @@ class _ProfilePageState extends State<ProfilePage> {
                     _buildMenuItem(
                       title: 'Notifications',
                       icon: Icons.notifications_none,
+                      trailingWidget: StreamBuilder<int>(
+                        stream: ReportService.instance.watchUnreadCount(),
+                        builder: (context, snap) {
+                          final unread = snap.data ?? 0;
+                          if (unread == 0) {
+                            return const SizedBox.shrink();
+                          }
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '$unread new',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                       onTap: () {
                         Navigator.push(
                           context,
@@ -549,10 +641,10 @@ class _ProfilePageState extends State<ProfilePage> {
                       },
                     ),
 
-                    if (widget.onSwitchToWorkerMode != null) ...[
+                    if (widget.onSwitchToWorkerMode != null && _isWorker) ...[
                       _buildDivider(),
                       _buildMenuItem(
-                        title: 'Worker portal (View Job Page)',
+                        title: 'Worker portal (manage reports)',
                         icon: Icons.badge_outlined,
                         textColor: primaryGreen,
                         onTap: widget.onSwitchToWorkerMode!,

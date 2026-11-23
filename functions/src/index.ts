@@ -19,6 +19,12 @@ import {
 initializeApp();
 const db = getFirestore();
 
+// Report module (teammate's code, plain JavaScript, kept in functions/reports):
+// AI moderation + report writing for citizen problem reports. Requires the
+// secret OPENAI_API_KEY at deploy time. Region europe-west1.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+export const analyzeReport = require("../../reports/analyze").analyzeReport;
+
 // Every function requires a signed-in user (checked inside the core too).
 // App Check can be enforced here once it is configured in the app:
 //   onCall({ enforceAppCheck: true }, ...)

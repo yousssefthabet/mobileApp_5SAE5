@@ -11,6 +11,13 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // A worker (or an admin) is a user whose profile has that role. The role
+    // can only be set from the console / Admin SDK, never from the app.
+    function isWorker() {
+      return isAuthenticated()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'user') in ['worker', 'admin'];
+    }
+
     // User profile document and subcollections
     //
     // `role` ("user" | "worker" | "admin") is NEVER chosen by the user:
@@ -32,9 +39,17 @@ service cloud.firestore {
       // and recreate their document.
       allow delete: if false;
 
-      // Private reports subcollection
+      // Reports: the author has full CRUD; workers read, update and delete.
       match /reports/{reportId} {
         allow read, write: if isOwner(userId);
+        allow read, update, delete: if isWorker();
+      }
+
+      // Notifications about the user's reports: the owner reads and clears
+      // them; a worker creates one in the same batch as a report update.
+      match /notifications/{notificationId} {
+        allow read, update, delete: if isOwner(userId);
+        allow create: if isWorker();
       }
 
       // Read-only mirror of the user's reservations.
@@ -91,9 +106,14 @@ service cloud.firestore {
     }
 
     // Top-level reports are not used by the app (reports live under
-    // users/{uid}/reports). Closed until a worker role exists.
+    // users/{uid}/reports).
     match /reports/{reportId} {
       allow read, write: if false;
+    }
+
+    // Workers list every user's reports with a collection-group query.
+    match /{path=**}/reports/{reportId} {
+      allow read: if isWorker();
     }
 
     // Default deny for any unmatched document or collection
